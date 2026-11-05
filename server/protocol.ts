@@ -3,6 +3,7 @@ import { ACTION_INFO, ROOM_INFO, RESOURCE_INFO } from '../shared/catalog.js';
 import type { ActionId, RoomId, Resource } from '../shared/catalog.js';
 const room = z.enum(ROOM_INFO.map(r => r.id) as [RoomId, ...RoomId[]]);
 export const commandSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('cancel') }),
   z.object({ type: z.literal('move'), x: z.number().finite().min(-1).max(1), y: z.number().finite().min(-1).max(1) }),
   z.object({ type: z.literal('travel'), room }),
   z.object({ type: z.literal('act'), action: z.enum(Object.keys(ACTION_INFO) as [ActionId, ...ActionId[]]), room }),

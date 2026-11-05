@@ -27,6 +27,7 @@ export interface Session { code: string; playerId: string; token: string }
 export type Result<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
 export interface Challenge { id: string; sequence: number[]; expiresAt: number; action: string; room: RoomId; target?: string }
 export type GameCommand =
+  | { type: 'cancel' }
   | { type: 'move'; x: number; y: number }
   | { type: 'travel'; room: RoomId }
   | { type: 'act'; action: ActionId; room: RoomId }
