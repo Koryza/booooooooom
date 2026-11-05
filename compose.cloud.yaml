@@ -1,0 +1,9 @@
+# Optional build-only overlay for the managed cloud's public CA bundle.
+services:
+  app:
+    build:
+      secrets:
+        - proxy_ca
+secrets:
+  proxy_ca:
+    file: ${CODEX_PROXY_CERT:?Managed cloud CA path is required}

@@ -1,0 +1,25 @@
+# Requires Docker Compose v2.24.4+ for !reset.
+services:
+  app:
+    ports: !reset []
+    environment:
+      PUBLIC_ORIGIN: https://${DOMAIN:?Set DOMAIN to the public DNS hostname}
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+volumes:
+  caddy-data:
+  caddy-config:

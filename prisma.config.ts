@@ -8,7 +8,8 @@ export default defineConfig({
   experimental: { adapter: true },
   engine: 'js',
   adapter: async () => {
-    if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required for database commands');
+    if (!process.env.DATABASE_URL)
+      throw new Error('DATABASE_URL is required for database commands');
     return new PrismaPg({ connectionString: process.env.DATABASE_URL });
   },
 });
