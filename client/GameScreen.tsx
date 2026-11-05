@@ -1,185 +1,249 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Activity,
-  Archive,
   ArrowRight,
-  Backpack,
-  BookOpen,
+  Biohazard,
+  CloudSnow,
+  Waves,
+  Zap,
+  Orbit,
+  Check,
   ChevronRight,
-  Hammer,
-  LogOut,
-  Map,
+  Copy,
+  DoorClosed,
+  DoorOpen,
+  Eye,
+  FileText,
+  Flag,
+  HelpCircle,
+  Hourglass,
+  LockKeyhole,
+  MessageCircle,
   Radio,
   Settings,
-  Shield,
+  ShieldCheck,
+  Sparkles,
+  Users,
   Volume2,
   VolumeX,
-  Wrench,
-  Zap,
+  Vote,
+  X,
 } from 'lucide-react';
-import type { GameConnection } from './network';
-import { Brand } from './Menu';
-import { Avatar, Meter, Modal } from './components';
+import { AVATAR_COLORS, CATEGORY_INFO, SPECIAL_INFO } from '../shared/catalog';
 import {
-  ACTION_INFO,
-  RESOURCE_INFO,
-  ROLE_INFO,
-  ROOM_INFO,
-  STORY,
-  type ActionId,
-  type RoomId,
-  type Resource,
-} from '../shared/catalog';
-import type { Challenge, GameCommand } from '../shared/types';
-import { costText, affordable, missions } from '../shared/rules';
-import { roomAt } from '../shared/navigation';
-import { Research, Workshop, Expeditions } from './Activities';
+  CATEGORIES,
+  type Category,
+  type GameCommand,
+  type GameState,
+  type PublicPlayer,
+  type SpecialCard,
+} from '../shared/types';
+import type { GameConnection } from './network';
+import { Avatar, Brand, CategoryIcon, HiddenCard, Modal } from './components';
 import { alarm, unlockAudio } from './audio';
-const World = lazy(() => import('./World'));
-type Tab = 'bunker' | 'research' | 'workshop' | 'expeditions' | 'journal';
+const PHASE_LABEL = {
+  lobby: 'Лобби',
+  reveal: 'Раскрытие карт',
+  discussion: 'Обсуждение',
+  voting: 'Тайное голосование',
+  results: 'Результат раунда',
+  ended: 'Состав выбран',
+};
+const DISASTER_ICONS = {
+  infection: Biohazard,
+  winter: CloudSnow,
+  flood: Waves,
+  storm: Zap,
+  spores: Biohazard,
+  impact: Orbit,
+};
+function Dossier({ player, onClose }: { player: PublicPlayer; onClose: () => void }) {
+  return (
+    <Modal title={`Общее досье: ${player.name}`} onClose={onClose}>
+      <div className="padded">
+        <p className="muted">Здесь только открытые для стола характеристики.</p>
+        <div className="dossier-grid">
+          {CATEGORIES.map((category) => (
+            <article key={category}>
+              <span className="eyebrow">
+                <CategoryIcon category={category} size={14} />
+                {CATEGORY_INFO[category].name}
+              </span>
+              {player.cards[category] ? (
+                <>
+                  <h3>{player.cards[category].title}</h3>
+                  <p>{player.cards[category].detail}</p>
+                </>
+              ) : (
+                <div className="dossier-locked">
+                  <LockKeyhole size={21} />
+                  <p>Карта не раскрыта</p>
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+function SpecialDialog({
+  special,
+  state: s,
+  pending,
+  onPlay,
+  onClose,
+}: {
+  special: SpecialCard;
+  state: GameState;
+  pending: boolean;
+  onPlay: (command: GameCommand) => Promise<boolean>;
+  onClose: () => void;
+}) {
+  const info = SPECIAL_INFO[special.kind],
+    others = s.players.filter((p) => !p.eliminated && p.id !== s.self.playerId);
+  const [targetId, setTargetId] = useState(others[0]?.id || '');
+  const target = others.find((p) => p.id === targetId),
+    hidden = CATEGORIES.filter((c) => !target?.cards[c]);
+  const [category, setCategory] = useState<Category>(hidden[0] || 'biology');
+  return (
+    <Modal title={info.name} onClose={onClose}>
+      <div className="padded">
+        <div className="special-dialog-icon">
+          <Sparkles size={32} />
+        </div>
+        <p className="special-description">{info.text}</p>
+        <p className="muted">
+          Одно применение за партию. За раунд можно сыграть только одну спецкарту.
+        </p>
+        {info.target && (
+          <label className="field">
+            УЧАСТНИК
+            <select
+              value={targetId}
+              onChange={(e) => {
+                setTargetId(e.target.value);
+                const p = others.find((p) => p.id === e.target.value);
+                setCategory(CATEGORIES.find((c) => !p?.cards[c]) || 'biology');
+              }}
+            >
+              {others.map((p) => (
+                <option value={p.id} key={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {info.category && (
+          <label className="field">
+            ЗАКРЫТАЯ ХАРАКТЕРИСТИКА
+            <select value={category} onChange={(e) => setCategory(e.target.value as Category)}>
+              {hidden.map((c) => (
+                <option value={c} key={c}>
+                  {CATEGORY_INFO[c].name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <button
+          className="button primary full"
+          disabled={
+            pending || (info.target && !target) || (info.category && !hidden.includes(category))
+          }
+          onClick={() =>
+            void onPlay({
+              type: 'special',
+              cardId: special.id,
+              ...(info.target ? { targetId } : {}),
+              ...(info.category ? { category } : {}),
+            }).then((ok) => {
+              if (ok) onClose();
+            })
+          }
+        >
+          Сыграть спецкарту
+          <Sparkles size={16} />
+        </button>
+      </div>
+    </Modal>
+  );
+}
 export function GameScreen({ game }: { game: GameConnection }) {
-  const s = game.state!;
-  const me = s.players.find((p) => p.id === game.session?.playerId);
-  const [selected, setSelected] = useState<RoomId>('command');
-  const [tab, setTab] = useState<Tab>('bunker');
-  const [modal, setModal] = useState<'inventory' | 'settings' | 'help' | null>(null);
-  const [challenge, setChallenge] = useState<Challenge | null>(null);
-  const [answer, setAnswer] = useState<number[]>([]);
-  const [message, setMessage] = useState('');
-  const [chatTab, setChatTab] = useState<'chat' | 'log'>('log');
-  const [sound, setSound] = useState(false);
-  const [pending, setPending] = useState(false);
-  const previousLog = useRef('');
+  const s = game.state!,
+    me = s.players.find((p) => p.id === s.self.playerId)!,
+    active = s.players.filter((p) => !p.eliminated),
+    isHost = s.hostId === me.id;
+  const [pending, setPending] = useState(false),
+    [modal, setModal] = useState<'settings' | 'help' | null>(null),
+    [dossier, setDossier] = useState<string | null>(null),
+    [special, setSpecial] = useState<SpecialCard | null>(null);
+  const [message, setMessage] = useState(''),
+    [chatTab, setChatTab] = useState<'chat' | 'log'>('chat'),
+    [sound, setSound] = useState(false),
+    [copied, setCopied] = useState(false);
+  const lastResult = useRef(s.lastVote?.eliminatedId);
   useEffect(() => {
-    const entry = s.logs.at(-1);
-    if (
-      sound &&
-      entry?.kind === 'danger' &&
-      previousLog.current &&
-      previousLog.current !== entry.id
-    )
-      alarm();
-    previousLog.current = entry?.id || '';
-  }, [s.logs.at(-1)?.id, sound]);
+    if (sound && s.lastVote?.eliminatedId && lastResult.current !== s.lastVote.eliminatedId)
+      alarm(false);
+    lastResult.current = s.lastVote?.eliminatedId;
+  }, [s.lastVote?.eliminatedId, sound]);
   async function command(cmd: GameCommand) {
     setPending(true);
+    game.setError('');
     try {
-      const c = await game.send<Challenge | null>('command', cmd);
-      if (c) {
-        setChallenge(c);
-        setAnswer([]);
-      }
+      await game.send('command', cmd);
+      return true;
     } catch (e) {
       game.setError((e as Error).message);
+      return false;
     } finally {
       setPending(false);
     }
   }
-  useEffect(() => {
-    const keys = new Set<string>();
-    let moving = false;
-    const typing = (t: EventTarget | null) =>
-      t instanceof HTMLElement &&
-      (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable);
-    const down = (e: KeyboardEvent) => {
-      if (
-        !typing(e.target) &&
-        !modal &&
-        !challenge &&
-        [
-          'w',
-          'a',
-          's',
-          'd',
-          'ц',
-          'ф',
-          'ы',
-          'в',
-          'arrowup',
-          'arrowdown',
-          'arrowleft',
-          'arrowright',
-        ].includes(e.key.toLowerCase())
-      ) {
-        e.preventDefault();
-        keys.add(e.key.toLowerCase());
-      }
-    };
-    const up = (e: KeyboardEvent) => keys.delete(e.key.toLowerCase());
-    const clear = () => keys.clear();
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
-    window.addEventListener('blur', clear);
-    const timer = setInterval(() => {
-      const x =
-        Number(['d', 'в', 'arrowright'].some((k) => keys.has(k))) -
-        Number(['a', 'ф', 'arrowleft'].some((k) => keys.has(k)));
-      const y =
-        Number(['s', 'ы', 'arrowdown'].some((k) => keys.has(k))) -
-        Number(['w', 'ц', 'arrowup'].some((k) => keys.has(k)));
-      if (me?.task || me?.expedition || me?.hp! <= 0 || !game.connected) return;
-      if (x || y || moving) {
-        void game.send('command', { type: 'move', x, y }).catch(() => {});
-        moving = !!(x || y);
-      }
-    }, 80);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
-      window.removeEventListener('blur', clear);
-    };
-  }, [modal, challenge, !!me?.task, me?.expedition, game.connected, me?.hp! <= 0]);
-  if (!me) return <p className="loading">Возвращаемся в бункер…</p>;
-  const current = roomAt(me),
-    r = ROOM_INFO.find((r) => r.id === selected)!,
-    status = s.rooms[selected];
-  const actions = Object.entries(ACTION_INFO).filter(
-    ([key, info]) => (key === 'repair' || info.room === selected) && status.built,
-  );
-  async function solve(next: number[]) {
-    setAnswer(next);
-    if (challenge && next.length === challenge.sequence.length) {
-      const c = challenge;
-      setChallenge(null);
-      await command({ type: 'challenge', id: c.id, answer: next });
+  const DisasterIcon = DISASTER_ICONS[s.scenario?.id as keyof typeof DISASTER_ICONS] || Biohazard;
+  const remaining = Math.max(0, Math.ceil((s.phaseEndsAt || s.clock) - s.clock));
+  const revealed = Object.values(me.cards).filter(Boolean).length;
+  const instructions =
+    s.phase === 'reveal'
+      ? me.eliminated
+        ? 'Вы наблюдаете. Участники открывают по одной карте.'
+        : me.revealedRound === s.round
+          ? 'Ваша карта раскрыта. Послушайте, что расскажут остальные.'
+          : 'Выберите одну характеристику из своего досье и откройте её всем.'
+      : s.phase === 'discussion'
+        ? 'Говорите, спорьте, находите союзников. Чья история убедительнее?'
+        : s.phase === 'voting'
+          ? 'Выберите, кто покинет состав. Ваш выбор скрыт до подсчёта.'
+          : s.phase === 'results'
+            ? 'Один стул опустел. История остальных продолжается.'
+            : 'Вы решили, кто получит место в новом мире.';
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(`${location.origin}/?room=${s.code}`);
+      setCopied(true);
+    } catch {
+      game.setNotice(`Код комнаты: ${s.code}`);
     }
   }
   return (
-    <div className="game-shell">
-      <header className="game-topbar">
+    <div className="table-shell" data-phase={s.phase} data-round={s.round}>
+      <header className="topbar table-topbar">
         <Brand />
-        <span className="game-room-code">
-          УБЕЖИЩЕ <b>{s.code}</b>
-        </span>
-        <div className="time-status">
-          <span className="live-dot" />
-          <b>ДЕНЬ {s.day}</b>
-          <span>
-            {String(Math.floor(s.hour)).padStart(2, '0')}:
-            {String(Math.floor((s.hour % 1) * 60)).padStart(2, '0')}
-          </span>
-          <small>
-            {s.hour >= 6 && s.hour < 20 ? 'СВЕТЛОЕ ВРЕМЯ' : 'НОЧЬ'} ·{' '}
-            {{ clear: 'ЯСНО', rain: 'ДОЖДЬ', storm: 'ГРОЗА', fog: 'ТУМАН' }[s.weather]}
-          </small>
-        </div>
-        <div className="header-tools">
+        <button className="room-code" onClick={copy}>
+          <span>КОМНАТА</span>
+          <b>{s.code}</b>
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+        <span className="table-mode">КАРТОЧНАЯ ПАРТИЯ · {s.players.length} УЧАСТНИКОВ</span>
+        <div className="top-tools">
           <button
             className="icon-button"
-            title="Инвентарь"
-            aria-label="Инвентарь"
-            onClick={() => setModal('inventory')}
-          >
-            <Backpack size={17} />
-          </button>
-          <button
-            className="icon-button"
-            title="Как играть"
-            aria-label="Как играть"
+            title="Правила"
+            aria-label="Правила"
             onClick={() => setModal('help')}
           >
-            <BookOpen size={17} />
+            <HelpCircle size={18} />
           </button>
           <button
             className="icon-button"
@@ -187,258 +251,432 @@ export function GameScreen({ game }: { game: GameConnection }) {
             aria-label="Настройки"
             onClick={() => setModal('settings')}
           >
-            <Settings size={17} />
+            <Settings size={18} />
           </button>
         </div>
       </header>
-      <nav className="game-nav">
-        {(
-          [
-            ['bunker', Map, 'Бункер'],
-            ['research', Zap, 'Исследования'],
-            ['workshop', Hammer, 'Мастерская'],
-            ['expeditions', Shield, 'Экспедиции'],
-            ['journal', Archive, 'Архив'],
-          ] as const
-        ).map(([id, Icon, label]) => (
-          <button key={id} onClick={() => setTab(id)} className={tab === id ? 'active' : ''}>
-            <Icon size={15} />
-            {label}
-          </button>
-        ))}
-        <span className="save-status">
-          {s.saveError ? '⚠ ОШИБКА СОХРАНЕНИЯ' : s.savedAt ? '● ПРОГРЕСС СОХРАНЁН' : 'СОХРАНЯЕМ…'}
-        </span>
-      </nav>
-      {s.crisis && (
-        <section className="crisis-banner" aria-label="Решение команды">
-          <div className="crisis-summary">
-            <span className="eyebrow">
-              <span className="live-dot" /> ЭКСТРЕННЫЙ ПРОТОКОЛ ·{' '}
-              {Math.max(0, Math.ceil(s.crisis.endsAt - s.elapsed))} СЕК
-            </span>
-            <h2>{s.crisis.title}</h2>
-            <p>{s.crisis.text}</p>
+      <section className="round-heading">
+        <div>
+          <span className="eyebrow">
+            <span /> ПАРТИЯ {String(s.match).padStart(2, '0')} / РАУНД{' '}
+            {String(s.round).padStart(2, '0')}
+          </span>
+          <h1>
+            {s.phase === 'ended'
+              ? 'Дверь закрывается.'
+              : s.phase === 'voting'
+                ? 'Кому не хватит места?'
+                : s.phase === 'discussion'
+                  ? 'У каждого есть аргумент.'
+                  : s.phase === 'results'
+                    ? 'Группа сделала выбор.'
+                    : 'Что вы расскажете о себе?'}
+          </h1>
+          <p>{instructions}</p>
+        </div>
+        <div className="round-status">
+          <div className="phase-name">
+            <i />
+            {PHASE_LABEL[s.phase]}
           </div>
-          <div className="crisis-choices">
-            {s.crisis.choices.map((choice, i) => (
-              <button
-                key={i}
-                className={s.crisis!.votes[me.id] === i ? 'voted' : ''}
-                onClick={() => void command({ type: 'vote', choice: i })}
-              >
-                <b>
-                  {choice.label}
-                  <small>
-                    {s.players.filter((p) => p.connected && s.crisis!.votes[p.id] === i).length}{' '}
-                    ГОЛ.
-                  </small>
-                </b>
-                <span>{choice.desc}</span>
-              </button>
-            ))}
-            <small>Большинство решает. При равенстве по таймеру — первый вариант.</small>
+          {s.phase !== 'ended' && (
+            <div className={'countdown ' + (remaining < 15 ? 'urgent' : '')}>
+              <Hourglass size={17} />
+              <b>
+                {String(Math.floor(remaining / 60)).padStart(2, '0')}:
+                {String(remaining % 60).padStart(2, '0')}
+              </b>
+            </div>
+          )}
+          <span>
+            {s.players.some((p) => p.connected)
+              ? 'Время идёт, пока хотя бы один участник в сети'
+              : 'Партия на паузе'}
+          </span>
+        </div>
+      </section>
+      {s.phase === 'ended' && (
+        <section className="finale-banner">
+          <div className="finale-seal">
+            <DoorClosed size={31} />
           </div>
+          <div className="grow">
+            <span className="eyebrow">ПРАВО НА БУДУЩЕЕ</span>
+            <h2>
+              В бункере остаются{' '}
+              {s.winners.map((id) => s.players.find((p) => p.id === id)?.name).join(', ')}.
+            </h2>
+            <p>
+              Состав выбран голосованием. Все характеристики открыты — время обсудить, что вы не
+              успели узнать.
+            </p>
+          </div>
+          {isHost ? (
+            <button
+              className="button primary"
+              disabled={pending}
+              onClick={() => void command({ type: 'rematch' })}
+            >
+              Новая случайная раздача
+              <ArrowRight size={16} />
+            </button>
+          ) : (
+            <span className="muted">Ведущий может начать новую партию.</span>
+          )}
         </section>
       )}
-      <div className="game-layout">
-        <aside className="left-sidebar">
-          <section className="panel resources">
-            <header className="panel-head">
-              <h2>Общие ресурсы</h2>
-              <Archive size={14} />
-            </header>
-            <div className="resource-grid">
-              {Object.entries(RESOURCE_INFO).map(([key, info]) => (
-                <div
-                  className={'resource ' + (s.resources[key as Resource] < 10 ? 'low' : '')}
-                  key={key}
-                >
-                  <span>{info.name}</span>
-                  <b>
-                    {Math.floor(s.resources[key as Resource])}
-                    <small>{info.unit}</small>
-                  </b>
-                </div>
-              ))}
+      {(s.phase === 'results' || (s.phase === 'voting' && s.ballot === 2)) && s.lastVote && (
+        <section className="result-banner">
+          <Flag size={23} />
+          <div className="grow">
+            <h3>
+              {s.lastVote.eliminatedId
+                ? `${s.players.find((p) => p.id === s.lastVote!.eliminatedId)?.name} покидает состав`
+                : 'Равенство голосов — переголосование'}
+            </h3>
+            <p>
+              {Object.entries(s.lastVote.counts)
+                .map(([id, count]) => `${s.players.find((p) => p.id === id)?.name}: ${count}`)
+                .join(' · ')}
+              {s.lastVote.lottery ? ' · После повторной ничьей применён случайный жребий.' : ''}
+            </p>
+          </div>
+          {s.phase === 'results' && isHost && (
+            <button
+              className="button secondary"
+              disabled={pending}
+              onClick={() => void command({ type: 'nextRound' })}
+            >
+              Следующий раунд
+              <ChevronRight size={15} />
+            </button>
+          )}
+        </section>
+      )}
+      <main className="table-layout">
+        <aside className="scenario-column">
+          <section className="scenario-card">
+            <div className="scenario-art">
+              <span className="eyebrow">КАТАСТРОФА / {s.scenario?.id.toUpperCase()}</span>
+              <div className="hazard-symbol">
+                <DisasterIcon size={70} strokeWidth={1} />
+              </div>
+              <span className="scenario-stamp">МИР БОЛЬШЕ НЕ ПРЕЖНИЙ</span>
             </div>
-          </section>
-          <section className="panel systems">
-            <header className="panel-head">
-              <h2>Жизнеобеспечение</h2>
-              <Activity size={14} />
-            </header>
             <div className="padded">
-              <div className={'power-status ' + (!s.power ? 'danger' : '')}>
-                <Zap size={17} />
-                {s.power ? 'Питание стабильно' : 'Нет электропитания'}
-              </div>
-              <Meter label="Кислород" value={s.oxygen} />
-              <Meter label="Мораль команды" value={s.morale} />
-              <Meter label="Целостность шлюза" value={s.rooms.airlock.integrity} />
-              <Meter label="Угроза снаружи" value={s.threat} color="var(--orange)" />
+              <h2>{s.scenario?.title}</h2>
+              <p>{s.scenario?.description}</p>
+              <details>
+                <summary>Что ждёт на поверхности?</summary>
+                <p>{s.scenario?.outside}</p>
+              </details>
             </div>
           </section>
-          <section className="panel mission-panel">
-            <header className="panel-head">
-              <h2>Цели команды</h2>
-              <span className="badge">{s.missionsDone.length}/6</span>
+          <section className="panel shelter-panel">
+            <header className="section-head">
+              <h2>Наше убежище</h2>
+              <DoorOpen size={18} />
             </header>
-            <div className="mission-list">
-              {s.maintenance && (
-                <div className="dynamic-mission">
-                  <span className="mission-dot" />
-                  <div>
-                    <b>{s.maintenance.title}</b>
-                    <p>{s.maintenance.desc}</p>
-                    <small>
-                      {Math.max(0, Math.ceil(s.maintenance.expiresAt - s.elapsed))} СЕК ·{' '}
-                      {costText(s.maintenance.reward)}
-                    </small>
-                  </div>
-                </div>
-              )}
-              {missions(s)
-                .filter((m) => !s.missionsDone.includes(m.id))
-                .slice(0, 3)
-                .map((m) => (
-                  <div key={m.id}>
-                    <span className="mission-dot" />
-                    <div>
-                      <b>{m.title}</b>
-                      <p>{m.desc}</p>
-                      <small>НАГРАДА: {costText(m.reward)}</small>
-                    </div>
-                  </div>
-                ))}
-              {s.rooms.generator.integrity < 30 && (
-                <p className="danger">Срочно отремонтируйте генератор!</p>
-              )}
+            <div className="shelter-seats">
+              <b>{s.seats}</b>
+              <div>
+                <span>МЕСТ В БУНКЕРЕ</span>
+                <small>Претендентов осталось: {active.length}</small>
+              </div>
+            </div>
+            <div className="shelter-numbers">
+              <div>
+                <b>
+                  {s.scenario?.shelter.area}
+                  <small>м²</small>
+                </b>
+                <span>ПЛОЩАДЬ</span>
+              </div>
+              <div>
+                <b>
+                  {s.scenario?.shelter.months}
+                  <small>мес.</small>
+                </b>
+                <span>ИЗОЛЯЦИЯ</span>
+              </div>
+            </div>
+            <div className="padded shelter-features">
+              <span className="eyebrow">ВНУТРИ ЕСТЬ</span>
+              {s.scenario?.shelter.features.map((f) => (
+                <p key={f}>
+                  <Check size={12} />
+                  {f}
+                </p>
+              ))}
+              <p>
+                <Check size={12} />
+                Еда на {s.scenario?.shelter.foodMonths} месяцев
+              </p>
+              <div className="shelter-warning">
+                <Radio size={15} />
+                <p>{s.scenario?.shelter.problem}</p>
+              </div>
             </div>
           </section>
+          <p className="scenario-note">
+            Условия убежища — ваши аргументы в обсуждении. Итоговый состав выбираете вы.
+          </p>
         </aside>
-        <main className="main-area">
-          {tab === 'bunker' ? (
-            <>
-              <div className="world-panel panel">
-                <div className="world-head">
-                  <div>
-                    <span className="dot online" /> ВНУТРЕННИЙ КОНТУР{' '}
-                    <small>/ ПРЯМАЯ ТРАНСЛЯЦИЯ</small>
-                  </div>
-                  <span>{s.players.filter((p) => p.connected).length} ВЫЖИВШИХ В СЕТИ</span>
-                </div>
-                <Suspense fallback={<div className="loading">Загружаем план убежища…</div>}>
-                  <World state={s} playerId={me.id} selected={selected} onSelect={setSelected} />
-                </Suspense>
-                <div className="world-help">
-                  <span>
-                    <kbd>W</kbd>
-                    <kbd>A</kbd>
-                    <kbd>S</kbd>
-                    <kbd>D</kbd> передвижение
-                  </span>
-                  <span>Выберите помещение для взаимодействия</span>
-                  <button className="text-button" onClick={() => setSelected(current || 'command')}>
-                    Где я?
-                  </button>
-                </div>
-              </div>
-              <div className="room-selector">
-                {ROOM_INFO.map((room) => (
-                  <button
-                    key={room.id}
-                    className={room.id === selected ? 'selected' : ''}
-                    onClick={() => setSelected(room.id as RoomId)}
-                  >
-                    {room.name}
-                    {!s.rooms[room.id as RoomId].built ? ' ⊕' : ''}
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : tab === 'journal' ? (
-            <section className="panel content-panel">
-              <header className="panel-head">
-                <h2>Архив проекта «Рассвет»</h2>
-                <span className="badge">{s.story.length}/5</span>
-              </header>
-              <div className="padded">
-                <div className="achievement-list">
-                  {s.achievements.map((a) => (
-                    <span className="badge" key={a}>
-                      ✧ {a}
+        <section className="players-column">
+          <div className="table-section-title">
+            <h2>За общим столом</h2>
+            <span>
+              <Users size={14} /> {active.length} в игре · {s.players.length - active.length}{' '}
+              наблюдают
+            </span>
+          </div>
+          <div className="player-board">
+            {s.players.map((p, i) => (
+              <article
+                key={p.id}
+                className={
+                  'player-tile ' +
+                  (p.eliminated ? 'eliminated ' : '') +
+                  (p.id === me.id ? 'is-me' : '')
+                }
+                data-player-id={p.id}
+              >
+                <header>
+                  <span className="player-number">{String(i + 1).padStart(2, '0')}</span>
+                  <Avatar avatar={p.avatar} size={39} />
+                  <div className="grow">
+                    <h3>
+                      {p.name}
+                      {p.id === me.id && <small>ВЫ</small>}
+                    </h3>
+                    <span>
+                      {p.characterName} · <i className={p.connected ? 'online' : ''} />
+                      {p.connected ? 'в сети' : 'нет связи'}
                     </span>
+                  </div>
+                  {p.eliminated ? (
+                    <span className="player-label excluded">ИСКЛЮЧЁН</span>
+                  ) : p.protected ? (
+                    <ShieldCheck size={19} className="protected" />
+                  ) : (
+                    <span className="card-count">
+                      {Object.values(p.cards).filter(Boolean).length}/8
+                    </span>
+                  )}
+                </header>
+                <div
+                  className="profession-strip"
+                  style={{ borderLeftColor: AVATAR_COLORS[p.avatar] }}
+                >
+                  <CategoryIcon category="profession" size={18} />
+                  <div>
+                    <small>ПРОФЕССИЯ</small>
+                    <b>{p.cards.profession?.title || 'Не раскрыта'}</b>
+                  </div>
+                </div>
+                <div className="public-traits">
+                  {CATEGORIES.filter((c) => c !== 'profession').map((category) => (
+                    <div className="public-trait" data-category={category} key={category}>
+                      {p.cards[category] ? (
+                        <div className="revealed-trait" key={p.cards[category].title}>
+                          <CategoryIcon category={category} size={13} />
+                          <div>
+                            <small>{CATEGORY_INFO[category].name}</small>
+                            <span>{p.cards[category].title}</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <HiddenCard category={category} />
+                      )}
+                    </div>
                   ))}
                 </div>
-                <p className="muted">
-                  Собирайте документы в экспедициях и прослушивайте эфир в командном центре. Архив
-                  открывает путь к вакцине.
-                </p>
-                {STORY.map((text, i) => (
-                  <article
-                    className={'story-record ' + (!s.story.includes(i) ? 'locked' : '')}
-                    key={i}
+                <footer>
+                  <button className="text-button" onClick={() => setDossier(p.id)}>
+                    <FileText size={12} />
+                    Открытое досье
+                  </button>
+                  <span>
+                    {p.doubleVote && 'ГОЛОС ×2 '}
+                    {p.specialCount} спец.
+                  </span>
+                </footer>
+                {s.phase === 'voting' && !me.eliminated && (
+                  <div className="player-vote">
+                    <button
+                      className={
+                        'button full ' +
+                        (s.self.voteTarget === p.id ? 'voted-button' : 'vote-button')
+                      }
+                      disabled={
+                        pending ||
+                        !!s.self.voteTarget ||
+                        p.id === me.id ||
+                        !s.candidates.includes(p.id)
+                      }
+                      onClick={() => void command({ type: 'vote', targetId: p.id })}
+                    >
+                      {s.self.voteTarget === p.id ? (
+                        <>
+                          <Check size={14} />
+                          Ваш голос за исключение
+                        </>
+                      ) : p.id === me.id ? (
+                        'Это вы'
+                      ) : p.eliminated ? (
+                        'Уже исключён'
+                      ) : p.protected ? (
+                        'Под защитой'
+                      ) : !s.candidates.includes(p.id) ? (
+                        'Не участвует в переголосовании'
+                      ) : (
+                        <>
+                          <Vote size={14} />
+                          Голос за исключение
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+                {s.phase === 'reveal' && !p.eliminated && (
+                  <div
+                    className={'player-round-status ' + (p.revealedRound === s.round ? 'done' : '')}
                   >
-                    <small>АРХИВ / 00{i + 1}</small>
-                    <p>{s.story.includes(i) ? text : 'Сигнал утрачен. Документ не найден.'}</p>
-                  </article>
-                ))}
-              </div>
-            </section>
-          ) : tab === 'research' ? (
-            <Research state={s} player={me} command={command} pending={pending} />
-          ) : tab === 'workshop' ? (
-            <Workshop state={s} player={me} command={command} pending={pending} />
-          ) : (
-            <Expeditions state={s} player={me} command={command} pending={pending} />
-          )}
-
-          <section className="panel comms">
-            <div className="comms-head">
-              <div className="tabs">
-                <button
-                  className={chatTab === 'log' ? 'active' : ''}
-                  onClick={() => setChatTab('log')}
-                >
-                  Журнал событий
-                </button>
+                    {p.revealedRound === s.round ? <Check size={12} /> : <Hourglass size={12} />}{' '}
+                    {p.revealedRound === s.round
+                      ? 'Карта раскрыта'
+                      : 'Выбирает карту для раскрытия'}
+                  </div>
+                )}
+                {s.phase === 'discussion' && !p.eliminated && p.readyForVote && (
+                  <div className="player-round-status done">
+                    <Check size={12} />
+                    Готов голосовать
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+          <div className="round-actions">
+            {s.phase === 'reveal' && (
+              <>
+                <Eye size={18} />
+                <p>
+                  {me.eliminated
+                    ? 'Можно наблюдать и общаться в чате.'
+                    : me.revealedRound === s.round
+                      ? 'Вы сделали ход. Осталось дождаться остальных.'
+                      : 'Ваши закрытые характеристики — в личном досье справа.'}
+                </p>
+                <span>
+                  {active.filter((p) => p.revealedRound === s.round).length}/{active.length} готовы
+                </span>
+              </>
+            )}
+            {s.phase === 'discussion' && (
+              <>
+                <MessageCircle size={18} />
+                <div className="grow">
+                  <b>Последний шанс привести аргумент.</b>
+                  <p>Спецкарты можно сыграть до начала голосования.</p>
+                </div>
+                {!me.eliminated && (
+                  <button
+                    className="button secondary"
+                    disabled={pending}
+                    onClick={() => void command({ type: 'readyVote', ready: !me.readyForVote })}
+                  >
+                    {me.readyForVote ? 'Отменить готовность' : 'Готов голосовать'}
+                  </button>
+                )}
+                {isHost && (
+                  <button
+                    className="button primary"
+                    disabled={pending}
+                    onClick={() => void command({ type: 'advance' })}
+                  >
+                    Начать голосование
+                    <Vote size={14} />
+                  </button>
+                )}
+              </>
+            )}
+            {s.phase === 'voting' && (
+              <>
+                <LockKeyhole size={18} />
+                <div className="grow">
+                  <b>
+                    {me.eliminated
+                      ? 'Вы наблюдаете за голосованием.'
+                      : s.self.voteTarget
+                        ? 'Голос принят. Изменить его уже нельзя.'
+                        : 'Голосуйте за исключение участника.'}
+                  </b>
+                  <p>Выбор каждого скрыт до подсчёта. Голосовать за себя нельзя.</p>
+                </div>
+                <span>
+                  {s.voters.length}/{active.length} голосов
+                </span>
+              </>
+            )}
+          </div>
+          <section className="panel communications">
+            <header>
+              <div className="chat-tabs">
                 <button
                   className={chatTab === 'chat' ? 'active' : ''}
                   onClick={() => setChatTab('chat')}
                 >
-                  Чат команды <span className="badge">{s.chat.length}</span>
+                  <MessageCircle size={14} />
+                  Обсуждение<span>{s.chat.length}</span>
+                </button>
+                <button
+                  className={chatTab === 'log' ? 'active' : ''}
+                  onClick={() => setChatTab('log')}
+                >
+                  <FileText size={14} />
+                  Ход партии
                 </button>
               </div>
-              <Radio size={14} />
-            </div>
-            <div className="game-messages">
-              {chatTab === 'log'
-                ? s.logs
-                    .slice(-20)
+              <span className="chat-live">
+                <i /> ОБЩИЙ КАНАЛ
+              </span>
+            </header>
+            <div className="messages" aria-live="polite">
+              {chatTab === 'chat' ? (
+                s.chat.length ? (
+                  s.chat
+                    .slice()
                     .reverse()
-                    .map((entry) => (
-                      <p className={entry.kind} key={entry.id}>
-                        <time>
-                          Д{entry.day} /{' '}
-                          {String(Math.floor((entry.at % 180) / 60)).padStart(2, '0')}:
-                          {String(Math.floor(entry.at % 60)).padStart(2, '0')}
-                        </time>
-                        {entry.text}
+                    .map((m) => (
+                      <p key={m.id}>
+                        <b>{m.name}</b>
+                        <span>{m.text}</span>
                       </p>
                     ))
-                : s.chat
-                    .slice(-30)
-                    .reverse()
-                    .map((entry) => (
-                      <p key={entry.id}>
-                        <b>{entry.name}</b>
-                        {entry.text}
-                      </p>
-                    ))}
+                ) : (
+                  <div className="chat-empty">
+                    <MessageCircle size={23} />
+                    <p>
+                      Первое слово за вами.
+                      <br />
+                      <small>Пишите здесь или обсуждайте голосом с друзьями.</small>
+                    </p>
+                  </div>
+                )
+              ) : (
+                s.logs
+                  .slice()
+                  .reverse()
+                  .map((l) => (
+                    <p key={l.id} className={l.kind}>
+                      <time>Р{l.round}</time>
+                      <span>{l.text}</span>
+                    </p>
+                  ))
+              )}
             </div>
             <form
-              className="chat-form"
               onSubmit={(e) => {
                 e.preventDefault();
                 if (message.trim())
@@ -454,301 +692,234 @@ export function GameScreen({ game }: { game: GameConnection }) {
               <input
                 value={message}
                 onChange={(e) => setMessage(e.target.value)}
-                placeholder="Передать сообщение команде…"
                 maxLength={240}
+                placeholder="Убедите остальных, что вы нужны…"
                 aria-label="Сообщение команде"
               />
               <button className="icon-button" aria-label="Отправить сообщение">
-                <ArrowRight size={16} />
+                <ArrowRight size={18} />
               </button>
             </form>
           </section>
-        </main>
-        <aside className="right-sidebar">
-          <section className="panel character">
-            <header className="panel-head">
-              <h2>Ваш выживший</h2>
-              <span className="badge">УР. {1 + Math.floor(me.xp / 100)}</span>
-            </header>
-            <div className="padded">
-              <div className="character-name">
-                <Avatar avatar={me.avatar} />
-                <div>
-                  <b>{me.name}</b>
-                  <small style={{ color: ROLE_INFO[me.role].color }}>
-                    {ROLE_INFO[me.role].name}
-                  </small>
-                </div>
-                <span className="dot online" />
+        </section>
+        <aside className="private-column">
+          <section className="private-panel">
+            <header className="private-head">
+              <div>
+                <LockKeyhole size={17} />
+                <h2>Ваше досье</h2>
               </div>
-              <Meter label="Здоровье" value={me.hp} />
-              <Meter label="Силы" value={me.energy} color="var(--orange)" />
-              <Meter label="Стресс" value={me.stress} color="var(--red)" />
-              {me.infection > 0 && (
-                <Meter label="Заражение" value={me.infection} color="var(--red)" />
-              )}
-              <span className="location-label">
-                {me.expedition
-                  ? '↗ На поверхности'
-                  : current
-                    ? `⌖ ${ROOM_INFO.find((r) => r.id === current)?.name}`
-                    : '⌖ Переход между отсеками'}
-              </span>
-              {me.task && (
-                <div className="current-task">
-                  <b>{me.task.label}</b>
-                  <div className="track">
-                    <i
-                      style={{
-                        width: `${Math.min(100, ((s.elapsed - me.task.startedAt) / (me.task.endsAt - me.task.startedAt)) * 100)}%`,
-                        background: 'var(--green)',
-                      }}
-                    />
-                  </div>
-                  <small>Осталось {Math.ceil(me.task.endsAt - s.elapsed)} сек.</small>
-                </div>
-              )}
-              {me.path.length > 0 && (
-                <p className="role-hint">Следуем по маршруту… WASD отменяет маршрут.</p>
-              )}
-              {me.hp <= 0 && (
-                <p className="danger">Вы без сознания. Попросите медика или используйте аптечку.</p>
-              )}
-            </div>
-          </section>
-          <section className="panel room-panel">
-            <header className="panel-head">
-              <h2>{r.name}</h2>
-              <Wrench size={15} />
+              <span>ТОЛЬКО ДЛЯ ВАС</span>
             </header>
-            <div className="padded">
-              <p className="room-description">{r.desc}</p>
-              <Meter label={`Состояние · Уровень ${status.level}`} value={status.integrity} />
-              {current !== selected && (
-                <button
-                  className="button secondary full"
-                  disabled={pending || !!me.task || !!me.expedition || !status.built}
-                  onClick={() => void command({ type: 'travel', room: selected })}
-                >
-                  Перейти в отсек
-                  <ChevronRight size={16} />
-                </button>
-              )}
-              {!status.built && (
-                <p className="muted">
-                  Требуется исследование «Гидропоника» и строительство в мастерской.
-                </p>
-              )}
-              <div className="room-actions">
-                {actions.map(([key, info]) => (
+            <div className="private-person">
+              <Avatar avatar={me.avatar} size={40} />
+              <div>
+                <b>{me.characterName}</b>
+                <span>За столом — {me.name}</span>
+              </div>
+              <div className="private-counter">
+                {revealed}
+                <small>/8 открыто</small>
+              </div>
+            </div>
+            <div className="private-legend">
+              <ShuffleIcon />
+              Всё выдано случайно. Скрытые карты видите только вы.
+            </div>
+            <div className="private-cards">
+              {CATEGORIES.map((category) => {
+                const card = s.self.cards![category],
+                  isPublic = card.revealed || s.phase === 'ended';
+                return (
+                  <article
+                    key={category}
+                    className={
+                      'sheet-card ' +
+                      (category === 'profession' ? 'profession-card ' : '') +
+                      (isPublic ? 'is-public' : '')
+                    }
+                    data-category={category}
+                  >
+                    <div className="sheet-card-top">
+                      <span>
+                        <CategoryIcon category={category} size={14} />
+                        {CATEGORY_INFO[category].name}
+                      </span>
+                      {isPublic ? <Eye size={13} /> : <LockKeyhole size={12} />}
+                    </div>
+                    <h3>{card.title}</h3>
+                    <details>
+                      <summary>Подробнее</summary>
+                      <p>{card.detail}</p>
+                    </details>
+                    {isPublic ? (
+                      <span className="public-note">ОТКРЫТА ВСЕМ</span>
+                    ) : (
+                      <button
+                        className="reveal-button"
+                        aria-label={`Раскрыть: ${CATEGORY_INFO[category].name}`}
+                        disabled={
+                          pending ||
+                          me.eliminated ||
+                          s.phase !== 'reveal' ||
+                          me.revealedRound === s.round
+                        }
+                        onClick={() => void command({ type: 'reveal', category })}
+                      >
+                        Раскрыть команде
+                        <Eye size={12} />
+                      </button>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+            <div className="special-cards">
+              <div className="private-section-title">
+                <Sparkles size={15} />
+                <h3>Ваши спецкарты</h3>
+                <span>ОДНА ЗА РАУНД</span>
+              </div>
+              {s.self.specials.map((card) => (
+                <article className={'special-card ' + (card.used ? 'used' : '')} key={card.id}>
+                  <div>
+                    <Sparkles size={17} />
+                    <b>{SPECIAL_INFO[card.kind].name}</b>
+                    {card.used && <Check size={14} />}
+                  </div>
+                  <p>{SPECIAL_INFO[card.kind].text}</p>
                   <button
-                    key={key}
-                    className="action-button"
+                    className="button secondary full"
                     disabled={
                       pending ||
-                      !!me.task ||
-                      current !== selected ||
-                      !affordable(s.resources, info.cost) ||
-                      !!me.expedition
+                      card.used ||
+                      me.eliminated ||
+                      !['reveal', 'discussion'].includes(s.phase) ||
+                      s.self.specialPlayedRound === s.round
                     }
-                    onClick={() =>
-                      void command({ type: 'act', action: key as ActionId, room: selected })
-                    }
-                    title={info.desc}
+                    onClick={() => setSpecial(card)}
                   >
-                    <div>
-                      <b>{info.name}</b>
-                      <span>{costText(info.cost)}</span>
-                    </div>
-                    <small>
-                      {info.seconds} СЕК <ChevronRight size={12} />
-                    </small>
+                    {card.used ? 'Сыграна' : 'Сыграть карту'}
+                    <ChevronRight size={13} />
                   </button>
-                ))}
-              </div>
-            </div>
-          </section>
-          <div className="team-strip">
-            <span className="eyebrow">ВМЕСТЕ ДО КОНЦА</span>
-            <div>
-              {s.players.map((p) => (
-                <div
-                  title={`${p.name} · ${p.connected ? 'в сети' : 'нет связи'} · ${Math.ceil(p.hp)} здоровья`}
-                  className={!p.connected ? 'offline' : ''}
-                  key={p.id}
-                >
-                  <Avatar avatar={p.avatar} size={30} />
-                </div>
+                </article>
               ))}
             </div>
-          </div>
-        </aside>
-      </div>
-      <footer className="game-footer">
-        <span>
-          <span className={'dot ' + (game.connected ? 'online' : '')} /> СВЯЗЬ{' '}
-          {game.connected ? 'СТАБИЛЬНА' : 'ПОТЕРЯНА'}
-        </span>
-        <span>РЕШЕНИЯ СЕЙЧАС — ПОСЛЕДСТВИЯ ЗАВТРА.</span>
-        <span>СИМУЛЯЦИЯ ПРИОСТАНОВИТСЯ, КОГДА ВСЕ ВЫЙДУТ</span>
-      </footer>
-      {challenge && (
-        <Modal
-          title="Восстановление контура"
-          onClose={() => {
-            setChallenge(null);
-            void command({ type: 'cancel' });
-          }}
-        >
-          <div className="padded">
-            <p className="muted">
-              Замкните контакты в указанном порядке. Схема действует 25 игровых секунд. Ошибка
-              расходует силы.
-            </p>
-            <div className="wire-sequence">
-              {challenge.sequence.map((n, i) => (
-                <span
-                  className={i < answer.length ? 'done' : ''}
-                  key={i}
-                  style={{ borderColor: ['#bcd586', '#d9ac70', '#86b1ce', '#c597b5'][n] }}
-                >
-                  {['A', 'B', 'C', 'D'][n]}
+            {s.self.notes.length > 0 && (
+              <section className="private-notes">
+                <span className="eyebrow">
+                  <LockKeyhole size={13} />
+                  СЕКРЕТНЫЕ ЗАПИСИ
                 </span>
-              ))}
-            </div>
-            <div className="wire-buttons">
-              {['A', 'B', 'C', 'D'].map((label, n) => (
-                <button
-                  key={n}
-                  onClick={() => void solve([...answer, n])}
-                  style={{ color: ['#bcd586', '#d9ac70', '#86b1ce', '#c597b5'][n] }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <p className="form-note">
-              Контакты: {answer.length} / {challenge.sequence.length}
-            </p>
-          </div>
-        </Modal>
+                {s.self.notes.map((note, i) => (
+                  <article key={i}>
+                    <small>
+                      {note.name} · {CATEGORY_INFO[note.category].name} · Р{note.round}
+                    </small>
+                    <b>{note.card.title}</b>
+                    <p>{note.card.detail}</p>
+                  </article>
+                ))}
+              </section>
+            )}
+          </section>
+        </aside>
+      </main>
+      <footer className="table-footer">
+        <span>
+          <i className={game.connected ? 'online' : ''} />{' '}
+          {game.connected ? 'СВЯЗЬ УСТАНОВЛЕНА' : 'СВЯЗЬ ПОТЕРЯНА'}
+        </span>
+        <span>{s.saveError ? 'ОШИБКА СОХРАНЕНИЯ' : 'ПАРТИЯ СОХРАНЯЕТСЯ АВТОМАТИЧЕСКИ'}</span>
+        <span>НЕ ВСЕ СЕКРЕТЫ СТОИТ ОТКРЫВАТЬ СРАЗУ.</span>
+      </footer>
+      {dossier && (
+        <Dossier
+          player={s.players.find((p) => p.id === dossier)!}
+          onClose={() => setDossier(null)}
+        />
+      )}
+      {special && (
+        <SpecialDialog
+          special={special}
+          state={s}
+          pending={pending}
+          onPlay={command}
+          onClose={() => setSpecial(null)}
+        />
       )}
       {modal && (
         <Modal
-          title={
-            modal === 'inventory'
-              ? 'Личный рюкзак'
-              : modal === 'help'
-                ? 'Протокол выживания'
-                : 'Настройки и сохранение'
-          }
+          title={modal === 'help' ? 'Как играть в «Бункер»' : 'Комната и сохранение'}
           onClose={() => setModal(null)}
         >
           <div className="padded">
-            {modal === 'inventory' ? (
-              <>
-                <p className="muted">
-                  Материалы находятся на общем складе. Предметы в рюкзаке принадлежат вашему
-                  персонажу.
-                </p>
-                {(['medkit', 'ration'] as const).map((item) => (
-                  <div className="inventory-row" key={item}>
-                    <div>
-                      <h3>
-                        {item === 'medkit' ? 'Аптечка' : 'Паёк'} × {me.inventory[item]}
-                      </h3>
-                      <p className="muted">
-                        {item === 'medkit'
-                          ? '+35 здоровья · −15 инфекции'
-                          : '+25 сил · −12 стресса'}
-                      </p>
-                    </div>
-                    <button
-                      className="button"
-                      disabled={!me.inventory[item] || !!me.task || !!me.expedition}
-                      onClick={() => void command({ type: 'use', item })}
-                    >
-                      Использовать
-                    </button>
-                  </div>
-                ))}
-                <h3 className="give-heading">Передать товарищу</h3>
-                {s.players
-                  .filter((p) => p.id !== me.id)
-                  .map((friend) => (
-                    <div className="give-row" key={friend.id}>
-                      <span>{friend.name}</span>
-                      {(['medkit', 'ration'] as const).map((item) => (
-                        <button
-                          className="button ghost"
-                          key={item}
-                          title="Нужно подойти к товарищу ближе 100 ед."
-                          disabled={
-                            pending ||
-                            !!me.task ||
-                            !!me.expedition ||
-                            !!friend.expedition ||
-                            !me.inventory[item] ||
-                            Math.hypot(friend.x - me.x, friend.y - me.y) > 100
-                          }
-                          onClick={() =>
-                            void command({ type: 'give', item, amount: 1, playerId: friend.id })
-                          }
-                        >
-                          {item === 'medkit' ? 'Аптечка' : 'Паёк'}
-                        </button>
-                      ))}
-                    </div>
-                  ))}
-                <p className="role-hint">
-                  Бронежилет:{' '}
-                  {me.inventory.armor ? 'экипирован · −50% урона в рейде' : 'не экипирован'}
-                </p>
-              </>
-            ) : modal === 'help' ? (
-              <div className="help-content">
-                <h3>Сначала — воздух, вода и энергия.</h3>
+            {modal === 'help' ? (
+              <div className="rules-text">
                 <p>
-                  День длится 3 минуты. Выберите генератор на карте и нажмите «Перейти в отсек»,
-                  затем почините оборудование. Для ремонта повторите порядок контактов в схеме.
+                  После катастрофы мест в убежище меньше, чем людей. Ваша задача — убедить группу
+                  оставить вашего случайного персонажа.
+                </p>
+                <h3>1. Случайная раздача</h3>
+                <p>
+                  Профессия открыта сразу. Биология, здоровье, хобби, фобия, багаж, факт и характер
+                  видны только вам. Ничего из этого нельзя выбирать при входе.
+                </p>
+                <h3>2. Раскрытие</h3>
+                <p>
+                  В каждом раунде каждый участник открывает одну закрытую карту. Если не успеть,
+                  сервер выберет её случайно по таймеру. Открытые характеристики видят все.
+                </p>
+                <h3>3. Обсуждение и спецкарты</h3>
+                <p>
+                  Расскажите, чем пригодитесь при текущей катастрофе и условиях убежища. Две
+                  случайные спецкарты меняют ситуацию: одну можно сыграть за раунд, каждую — один
+                  раз за партию.
+                </p>
+                <h3>4. Тайное голосование</h3>
+                <p>
+                  Голосуйте за исключение другого участника. Голос нельзя изменить. Если все
+                  допустимые голоса приняты, сразу идёт подсчёт; иначе ждём таймер. При ничьей —
+                  переголосование между лидерами. Повторную ничью или отсутствие голосов разрешает
+                  случайный жребий.
+                </p>
+                <h3>5. Следующий раунд</h3>
+                <p>
+                  Исключённые наблюдают и могут писать в чат, но не голосуют и не играют карты.
+                  Партия заканчивается, когда участников остаётся ровно столько, сколько мест. Все
+                  досье открываются. Ведущий может вернуть всех в лобби для новой случайной раздачи.
                 </p>
                 <p>
-                  Двигайтесь клавишами WASD / стрелками или прокладывайте маршрут через панель
-                  помещения. Действия требуют присутствия в отсеке. Материалы и припасы общие.
-                </p>
-                <p>
-                  Поддерживайте генератор, воду и вентиляцию. Отдыхайте, готовьте еду и лечитесь.
-                  Военный защищает шлюз; разведчик добывает ресурсы; учёный открывает технологии.
-                </p>
-                <p>
-                  При высоком уровне угрозы заражённые атакуют. Выйдите к шлюзу и отправьте
-                  экспедицию. Решения событий принимаются большинством голосов, иначе действует
-                  выбор по таймеру.
-                </p>
-                <p>
-                  Прогресс сохраняется автоматически. Для возвращения используйте тот же браузер или
-                  сохраните ключ сессии в настройках. Когда все отключены, время останавливается.
+                  Если все отключатся, таймеры остановятся. Для возвращения нужен тот же браузер или
+                  ключ сессии из настроек.
                 </p>
               </div>
             ) : (
               <>
+                <div className="settings-room">
+                  <span className="eyebrow">КОД КОМНАТЫ</span>
+                  <strong>{s.code}</strong>
+                  <button className="button secondary" onClick={copy}>
+                    {copied ? 'Ссылка скопирована' : 'Копировать приглашение'}
+                    <Copy size={14} />
+                  </button>
+                </div>
                 <button
                   className="button full"
                   onClick={() => {
                     if (!sound) void unlockAudio();
                     setSound(!sound);
-                    game.setNotice(sound ? 'Звук выключен' : 'Звуковые сигналы включены');
                   }}
                 >
-                  {sound ? <Volume2 size={16} /> : <VolumeX size={16} />}Звуковые сигналы:{' '}
-                  {sound ? 'вкл.' : 'выкл.'}
+                  {sound ? <Volume2 size={16} /> : <VolumeX size={16} />}Сигналы:{' '}
+                  {sound ? 'включены' : 'выключены'}
                 </button>
                 <button
                   className="button full"
                   onClick={() =>
                     void game
                       .send('save')
-                      .then(() => game.setNotice('Убежище сохранено'))
+                      .then(() => game.setNotice('Партия сохранена'))
                       .catch((e) => game.setError(e.message))
                   }
                 >
@@ -757,52 +928,38 @@ export function GameScreen({ game }: { game: GameConnection }) {
                 <button
                   className="button full"
                   onClick={() => {
+                    if (!game.session) return;
                     const blob = new Blob([JSON.stringify(game.session)], {
                       type: 'application/json',
                     });
                     const a = document.createElement('a');
                     a.href = URL.createObjectURL(blob);
-                    a.download = `bunker-${s.code}-session.json`;
+                    a.download = `bunker-cards-${s.code}-session.json`;
                     a.click();
                     URL.revokeObjectURL(a.href);
                   }}
                 >
-                  Скачать ключ своей сессии
+                  Скачать ключ сессии
                 </button>
                 <p className="muted">
-                  Ключ даёт доступ к вашему персонажу. Храните его у себя. Код комнаты для друзей:{' '}
-                  <b>{s.code}</b>.
+                  Ключ восстанавливает вашего персонажа и его закрытые карты. Храните его у себя.
+                  Для друзей — только код комнаты.
                 </p>
                 <button
                   className="button ghost full"
                   onClick={() => void game.leave().catch((e) => game.setError(e.message))}
                 >
-                  <LogOut size={16} />
-                  Выйти в главное меню
+                  Выйти в меню
+                  <X size={14} />
                 </button>
               </>
             )}
           </div>
         </Modal>
       )}
-      {s.phase === 'ended' && (
-        <Modal title="Эта история останется с нами">
-          <div className="padded ending">
-            <span className="eyebrow">{s.day} ДНЕЙ ВМЕСТЕ</span>
-            <h2>{s.ending}</h2>
-            <p className="muted">
-              Ремонтов: {s.stats.repairs} · Экспедиций: {s.stats.expeditions} · Технологий:{' '}
-              {s.research.length}
-            </p>
-            <button
-              className="button primary"
-              onClick={() => void game.leave().catch((e) => game.setError(e.message))}
-            >
-              Начать новую историю
-            </button>
-          </div>
-        </Modal>
-      )}
     </div>
   );
+}
+function ShuffleIcon() {
+  return <Sparkles size={15} />;
 }

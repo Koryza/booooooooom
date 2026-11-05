@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { Server, type Socket } from 'socket.io';
 import { z } from 'zod';
-import { codeSchema, difficulties, profileSchema } from '../shared/validation.js';
+import { codeSchema, profileSchema, settingsSchema } from '../shared/validation.js';
 import type { Player, Session } from '../shared/types.js';
 import { newState, newPlayer, log } from './state.js';
 import { commandSchema } from './protocol.js';
@@ -53,7 +53,6 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
       if (rooms.size >= 100) throw new Error('Сервер заполнен');
       for (const player of snapshot.state.players) {
         player.connected = false;
-        player.path = [];
       }
       const runtime = { ...snapshot, engine: new Engine(snapshot.state), lastEmpty: Date.now() };
       rooms.set(code, runtime);
@@ -67,7 +66,10 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
     }
   }
   function broadcast(room: Runtime) {
-    io.to(room.state.code).emit('state', room.state);
+    for (const player of room.state.players) {
+      const socket = seats.get(player.id);
+      if (socket?.connected) socket.emit('state', room.engine.view(player.id));
+    }
   }
   async function save(room: Runtime, strict = false) {
     const prior = room.state.savedAt;
@@ -93,7 +95,10 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
   }
   async function attach(socket: Socket, room: Runtime, player: Player) {
     const previous = seats.get(player.id);
-    if (previous && previous !== socket) previous.disconnect(true);
+    if (previous && previous !== socket) {
+      previous.emit('replaced');
+      previous.disconnect(true);
+    }
     socket.data.code = room.state.code;
     socket.data.playerId = player.id;
     seats.set(player.id, socket);
@@ -134,9 +139,7 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
     on('create', async (data) => {
       unattached();
       limited('create:' + socket.handshake.address, 6, 60000);
-      const parsed = z
-        .object({ profile: profileSchema, difficulty: z.enum(difficulties) })
-        .parse(data);
+      const parsed = z.object({ profile: profileSchema }).parse(data);
       if (rooms.size >= 100) throw new Error('Сервер заполнен');
       let code = '';
       do {
@@ -144,7 +147,7 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
           '',
         );
       } while (rooms.has(code) || (await store.load(code)));
-      const state = newState(code, parsed.difficulty);
+      const state = newState(code);
       const player = newPlayer(parsed.profile);
       state.players.push(player);
       state.hostId = player.id;
@@ -167,9 +170,11 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
       const parsed = z.object({ code: codeSchema, profile: profileSchema }).parse(data);
       const room = await load(parsed.code);
       if (!room) throw new Error('Комната не найдена. Проверьте код.');
-      if (room.state.phase === 'ended')
-        throw new Error('Эта история завершена. Создайте новое убежище.');
-      if (room.state.players.length >= 6) throw new Error('В комнате уже 6 выживших');
+      if (room.state.phase !== 'lobby')
+        throw new Error(
+          'Партия уже идёт. Для возвращения используйте ключ сессии; новые игроки входят в лобби.',
+        );
+      if (room.state.players.length >= 12) throw new Error('В комнате уже 12 участников');
       const player = newPlayer(parsed.profile);
       room.state.players.push(player);
       const token = randomBytes(32).toString('hex');
@@ -198,8 +203,7 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
     });
     on('profile', (data) => {
       const { room, player } = current(socket);
-      if (room.state.phase !== 'lobby')
-        throw new Error('Профессию можно изменить только до начала');
+      if (room.state.phase !== 'lobby') throw new Error('Имя можно изменить только в лобби');
       Object.assign(player, profileSchema.parse(data), { ready: false });
       broadcast(room);
     });
@@ -209,18 +213,17 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
       player.ready = z.boolean().parse(data);
       broadcast(room);
     });
-    on('start', async () => {
+    on('settings', async (data) => {
       const { room, player } = current(socket);
       if (room.state.phase !== 'lobby' || room.state.hostId !== player.id)
-        throw new Error('Только лидер может начать игру');
-      if (!room.state.players.filter((p) => p.connected).every((p) => p.ready))
-        throw new Error('Дождитесь готовности всех игроков');
-      room.state.phase = 'playing';
-      log(
-        room.state,
-        'Герметизация завершена. Держитесь вместе. Генератор нуждается в ремонте.',
-        'story',
-      );
+        throw new Error('Настройки доступны ведущему в лобби');
+      room.state.settings = settingsSchema.parse(data);
+      broadcast(room);
+      await save(room);
+    });
+    on('start', async () => {
+      const { room, player } = current(socket);
+      room.engine.start(player);
       broadcast(room);
       await save(room);
     });
@@ -232,7 +235,7 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
         id: randomBytes(8).toString('hex'),
         name: player.name,
         text,
-        at: room.state.elapsed,
+        playerId: player.id,
       });
       room.state.chat = room.state.chat.slice(-80);
       broadcast(room);
@@ -240,12 +243,9 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
     on('command', async (data) => {
       const { room, player } = current(socket);
       const cmd = commandSchema.parse(data);
-      const challenge = room.engine.command(player, cmd);
-      if (cmd.type !== 'move') {
-        broadcast(room);
-        await save(room);
-      }
-      return challenge;
+      room.engine.command(player, cmd);
+      broadcast(room);
+      await save(room);
     });
     on('save', async () => {
       const { room } = current(socket);
@@ -269,7 +269,6 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
       const { room, player } = current(socket);
       seats.delete(player.id);
       player.connected = false;
-      player.path = [];
       if (room.state.phase === 'lobby') {
         room.state.players = room.state.players.filter((p) => p.id !== player.id);
         delete room.tokens[player.id];
@@ -287,7 +286,6 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
       try {
         const { room, player } = current(socket);
         player.connected = false;
-        player.path = [];
         seats.delete(player.id);
         if (room.state.hostId === player.id)
           room.state.hostId = room.state.players.find((p) => p.connected)?.id || player.id;
@@ -330,8 +328,9 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
   app.get('/api/health', (_req, res) =>
     res.status(persistenceError ? 503 : 200).json({
       ok: !persistenceError,
-      game: 'BUNKER: LAST SHELTER',
-      version: '0.1.0',
+      game: 'Бункер — карточная игра',
+      version: '0.2.0',
+      mode: 'social',
       storage: persistenceError ? 'error' : 'ready',
     }),
   );

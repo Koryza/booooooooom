@@ -1,10 +1,10 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { GameState } from '../shared/types.js';
+import type { RoomState } from '../shared/types.js';
 import type { PrismaClient } from '@prisma/client';
 export interface Snapshot {
-  state: GameState;
+  state: RoomState;
   tokens: Record<string, string>;
 }
 export interface Store {
@@ -23,8 +23,8 @@ export class FileStore implements Store {
     await this.writes.get(code);
     try {
       const value = JSON.parse(await readFile(this.file(code), 'utf8')) as Snapshot;
-      if (value.state.version !== 1 || value.state.code !== code || !value.tokens)
-        throw new Error('Unsupported save format');
+      if (value.state.version !== 2 || value.state.code !== code || !value.tokens)
+        throw new Error('Это сохранение старого симулятора. Создайте новую карточную комнату.');
       return value;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -63,8 +63,8 @@ export class PostgresStore implements Store {
     const row = await this.db.savedRoom.findUnique({ where: { code } });
     if (!row) return null;
     const snapshot = row.snapshot as unknown as Snapshot;
-    if (snapshot.state.version !== 1 || snapshot.state.code !== code || !snapshot.tokens)
-      throw new Error('Unsupported save format');
+    if (snapshot.state.version !== 2 || snapshot.state.code !== code || !snapshot.tokens)
+      throw new Error('Это сохранение старого симулятора. Создайте новую карточную комнату.');
     return snapshot;
   }
   save(snapshot: Snapshot): Promise<void> {

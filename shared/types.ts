@@ -1,110 +1,154 @@
-import type { Cost, Resources, RoomId, ActionId } from './catalog.js';
-import type { Difficulty, Role } from './validation.js';
-export type Point = { x: number; y: number };
-export interface Player extends Point {
+export const CATEGORIES = [
+  'profession',
+  'biology',
+  'health',
+  'hobby',
+  'phobia',
+  'baggage',
+  'fact',
+  'trait',
+] as const;
+export type Category = (typeof CATEGORIES)[number];
+export type Phase = 'lobby' | 'reveal' | 'discussion' | 'voting' | 'results' | 'ended';
+export interface Card {
+  title: string;
+  detail: string;
+}
+export interface CharacterCard extends Card {
+  revealed: boolean;
+}
+export type Sheet = Record<Category, CharacterCard>;
+export const SPECIAL_KINDS = [
+  'newProfession',
+  'newHealth',
+  'newPhobia',
+  'swapProfession',
+  'swapBaggage',
+  'peek',
+  'expose',
+  'immunity',
+  'doubleVote',
+] as const;
+export type SpecialKind = (typeof SPECIAL_KINDS)[number];
+export interface SpecialCard {
+  id: string;
+  kind: SpecialKind;
+  used: boolean;
+}
+export interface PeekNote {
+  playerId: string;
+  name: string;
+  category: Category;
+  card: Card;
+  round: number;
+}
+export interface Player {
   id: string;
   name: string;
-  role: Role;
   avatar: number;
   connected: boolean;
   ready: boolean;
-  hp: number;
-  energy: number;
-  stress: number;
-  infection: number;
-  xp: number;
-  inventory: { medkit: number; ration: number; armor: number };
-  path: Point[];
-  task: null | {
-    label: string;
-    startedAt: number;
-    endsAt: number;
-    action: string;
-    room: RoomId;
-    target?: string;
-    quality: number;
+  characterName: string | null;
+  sheet: Sheet | null;
+  specials: SpecialCard[];
+  notes: PeekNote[];
+  eliminated: boolean;
+  revealedRound: number;
+  readyForVote: boolean;
+  specialPlayedRound: number;
+  immunityRound: number;
+  doubleVoteRound: number;
+}
+export interface Settings {
+  seats: number | null;
+  revealSeconds: number;
+  discussionSeconds: number;
+  voteSeconds: number;
+}
+export interface Scenario {
+  id: string;
+  title: string;
+  description: string;
+  outside: string;
+  shelter: {
+    area: number;
+    months: number;
+    foodMonths: number;
+    features: string[];
+    problem: string;
   };
-  expedition: string | null;
 }
 export interface LogEntry {
   id: string;
-  at: number;
-  day: number;
+  round: number;
   text: string;
-  kind: 'info' | 'good' | 'danger' | 'story';
+  kind: 'info' | 'reveal' | 'special' | 'vote';
 }
 export interface ChatEntry {
   id: string;
+  playerId: string;
   name: string;
   text: string;
-  at: number;
 }
-export interface Crisis {
-  id: string;
-  type: string;
-  title: string;
-  text: string;
-  choices: { label: string; desc: string }[];
-  votes: Record<string, number>;
-  endsAt: number;
+export interface VoteResult {
+  counts: Record<string, number>;
+  eliminatedId: string | null;
+  tied: string[];
+  runoff: boolean;
+  lottery: boolean;
+  votesCast: number;
 }
-export interface Expedition {
-  id: string;
-  zone: string;
-  mode: 'quiet' | 'fast';
-  players: string[];
-  launched: boolean;
-  endsAt: number;
-  risk: number;
-}
-export interface GameState {
-  version: 1;
+export interface RoomState {
+  version: 2;
+  mode: 'social';
   code: string;
   hostId: string;
-  phase: 'lobby' | 'playing' | 'ended';
-  difficulty: Difficulty;
+  phase: Phase;
+  settings: Settings;
+  match: number;
+  round: number;
+  clock: number;
+  phaseEndsAt: number | null;
+  seats: number;
   players: Player[];
-  resources: Resources;
-  rooms: Record<RoomId, { integrity: number; level: number; built: boolean }>;
-  elapsed: number;
-  day: number;
-  hour: number;
-  power: boolean;
-  oxygen: number;
-  morale: number;
-  threat: number;
-  research: string[];
-  story: number[];
-  achievements: string[];
+  scenario: Scenario | null;
   logs: LogEntry[];
   chat: ChatEntry[];
-  crisis: Crisis | null;
-  expeditions: Expedition[];
-  weather: 'clear' | 'rain' | 'storm' | 'fog';
-  nextEvent: number;
-  seed: number;
-  ending: string | null;
-  missionsDone: string[];
-  maintenance: null | {
-    title: string;
-    desc: string;
-    kind: 'repair' | 'oxygen' | 'food' | 'water' | 'defense' | 'craft';
-    target?: RoomId;
-    goal: number;
-    expiresAt: number;
-    reward: Cost;
-  };
-  nextMaintenance: number;
-  jobsCompleted: number;
-  stats: {
-    repairs: number;
-    expeditions: number;
-    crafted: number;
-    attacks: number;
-    rescued: number;
-  };
+  votes: Record<string, string>;
+  candidates: string[];
+  ballot: number;
+  lastVote: VoteResult | null;
+  winners: string[];
   savedAt: number;
   saveError: boolean;
+}
+export interface PublicPlayer {
+  id: string;
+  name: string;
+  avatar: number;
+  connected: boolean;
+  ready: boolean;
+  characterName: string | null;
+  eliminated: boolean;
+  cards: Record<Category, Card | null>;
+  revealedRound: number;
+  readyForVote: boolean;
+  protected: boolean;
+  doubleVote: boolean;
+  specialsUsed: SpecialKind[];
+  specialCount: number;
+}
+export interface GameState extends Omit<RoomState, 'players' | 'votes'> {
+  players: PublicPlayer[];
+  voters: string[];
+  self: {
+    playerId: string;
+    cards: Sheet | null;
+    specials: SpecialCard[];
+    notes: PeekNote[];
+    voteTarget: string | null;
+    specialPlayedRound: number;
+  };
 }
 export interface Session {
   code: string;
@@ -112,34 +156,11 @@ export interface Session {
   token: string;
 }
 export type Result<T = undefined> = { ok: true; data: T } | { ok: false; error: string };
-export interface Challenge {
-  id: string;
-  sequence: number[];
-  expiresAt: number;
-  action: string;
-  room: RoomId;
-  target?: string;
-}
 export type GameCommand =
-  | { type: 'cancel' }
-  | { type: 'move'; x: number; y: number }
-  | { type: 'travel'; room: RoomId }
-  | { type: 'act'; action: ActionId; room: RoomId }
-  | { type: 'challenge'; id: string; answer: number[] }
-  | { type: 'craft'; recipe: string }
-  | { type: 'research'; tech: string }
-  | { type: 'upgrade'; room: RoomId }
-  | { type: 'build' }
-  | { type: 'use'; item: 'medkit' | 'ration' }
-  | { type: 'give'; item: 'medkit' | 'ration'; amount: number; playerId: string }
-  | { type: 'expedition'; zone: string; mode: 'quiet' | 'fast' }
-  | { type: 'join-expedition'; id: string }
-  | { type: 'vote'; choice: number }
-  | { type: 'ending'; ending: 'evacuation' | 'autonomy' | 'vaccine' };
-export interface Mission {
-  id: string;
-  title: string;
-  desc: string;
-  done: boolean;
-  reward: Cost;
-}
+  | { type: 'reveal'; category: Category }
+  | { type: 'readyVote'; ready: boolean }
+  | { type: 'advance' }
+  | { type: 'vote'; targetId: string }
+  | { type: 'nextRound' }
+  | { type: 'special'; cardId: string; targetId?: string; category?: Category }
+  | { type: 'rematch' };

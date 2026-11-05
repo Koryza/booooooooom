@@ -3,7 +3,7 @@ import { io, type Socket } from 'socket.io-client';
 import type { GameState, Result, Session } from '../shared/types';
 export function readSession(): Session | null {
   try {
-    const s = JSON.parse(localStorage.getItem('bunker:session') || 'null');
+    const s = JSON.parse(localStorage.getItem('bunker:cards:session:v2') || 'null');
     return s?.token && s?.code && s?.playerId ? s : null;
   } catch {
     return null;
@@ -14,6 +14,7 @@ export function useGame() {
   const [session, setSession] = useState<Session | null>(readSession);
   const sessionRef = useRef(session);
   const [connected, setConnected] = useState(false);
+  const [recovering, setRecovering] = useState(!!session);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const socketRef = useRef<Socket | null>(null);
@@ -21,8 +22,8 @@ export function useGame() {
     sessionRef.current = value;
     setSession(value);
     try {
-      if (value) localStorage.setItem('bunker:session', JSON.stringify(value));
-      else localStorage.removeItem('bunker:session');
+      if (value) localStorage.setItem('bunker:cards:session:v2', JSON.stringify(value));
+      else localStorage.removeItem('bunker:cards:session:v2');
     } catch {
       setNotice('Хранилище браузера недоступно. Сохраните ключ сессии в настройках.');
     }
@@ -50,19 +51,25 @@ export function useGame() {
       setConnected(true);
       setError('');
       if (sessionRef.current)
-        void send<Session>('resume', sessionRef.current).catch((e) => {
-          setError(e.message);
-          if (e.message.includes('недействительна')) {
-            remember(null);
-            setState(null);
-          }
-        });
+        void send<Session>('resume', sessionRef.current)
+          .catch((e) => {
+            setError(e.message);
+            if (e.message.includes('недействительна')) {
+              remember(null);
+              setState(null);
+            }
+          })
+          .finally(() => setRecovering(false));
+      else setRecovering(false);
     });
     socket.on('disconnect', () => setConnected(false));
     socket.on('connect_error', () => {
       setConnected(false);
       setError('Сервер недоступен. Проверьте подключение.');
     });
+    socket.on('replaced', () =>
+      setError('Сессия открыта в другой вкладке. Обновите страницу, чтобы вернуться сюда.'),
+    );
     socket.on('kicked', () => {
       remember(null);
       setState(null);
@@ -101,6 +108,7 @@ export function useGame() {
     state,
     session,
     connected,
+    recovering,
     error,
     notice,
     setError,
