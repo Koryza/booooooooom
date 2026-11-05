@@ -1,0 +1,2 @@
+:root { color: #d6ded5; background: #101713; font-family: 'Segoe UI', sans-serif; color-scheme: dark; }
+body { margin: 0; } main { max-width: 1100px; margin: 10vh auto; padding: 40px; } h1 { font-size: clamp(60px, 12vw, 150px); margin: 0; letter-spacing: -.06em; } h1 span { display: block; font-size: 22px; letter-spacing: .4em; color: #b6d667; } p { color: #98a597; }

@@ -1,0 +1,13 @@
+generator client {
+  provider = "prisma-client-js"
+  engineType = "client"
+}
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+model SavedRoom {
+  code      String   @id
+  snapshot  Json
+  updatedAt DateTime @updatedAt
+}
