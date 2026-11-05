@@ -37,7 +37,7 @@ export type GameCommand =
   | { type: 'upgrade'; room: RoomId }
   | { type: 'build' }
   | { type: 'use'; item: 'medkit' | 'ration' }
-  | { type: 'transfer'; resource: Resource; amount: number; playerId: string }
+  | { type: 'give'; item: 'medkit' | 'ration'; amount: number; playerId: string }
   | { type: 'expedition'; zone: string; mode: 'quiet' | 'fast' }
   | { type: 'join-expedition'; id: string }
   | { type: 'vote'; choice: number }

@@ -179,10 +179,11 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
   });
   let ticks = 0;
   const timer = options.tick === false ? undefined : setInterval(() => {
+    ticks++;
     for (const room of rooms.values()) {
       if (room.state.players.some(p => p.connected)) {
         room.engine.tick(0.1);
-        if (++ticks % 2 === 0) broadcast(room);
+        if (ticks % 2 === 0) broadcast(room);
       }
     }
   }, 100);

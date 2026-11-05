@@ -15,7 +15,7 @@
     "test": "vitest run --config vitest.config.ts",
     "test:e2e": "playwright test",
     "db:generate": "node scripts/generate.mjs",
-    "db:deploy": "prisma migrate deploy",
+    "db:deploy": "node scripts/migrate.mjs",
     "postinstall": "node scripts/generate.mjs"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
     "@prisma/client": "6.19.0",
     "express": "5.1.0",
     "lucide-react": "0.468.0",
+    "pg": "8.16.3",
     "phaser": "3.90.0",
     "react": "19.1.1",
     "react-dom": "19.1.1",

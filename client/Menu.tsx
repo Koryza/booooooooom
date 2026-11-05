@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ArrowRight, Shield, Users, Radio, ChevronRight, Copy, Check } from 'lucide-react';
 import type { GameConnection } from './network';
+import type { Session } from '../shared/types';
 import { Avatar, RolePicker, PlayerCard } from './components';
 import type { Difficulty, Role } from '../shared/validation';
 import { ROLE_INFO } from '../shared/catalog';
@@ -25,7 +26,7 @@ export function Menu({ game }: { game: GameConnection }) {
     <label className="field">ВАШ ПЕРСОНАЖ</label><div className="avatar-picker">{Array.from({ length: 6 }, (_, i) => <button type="button" className={avatar === i ? 'selected' : ''} key={i} onClick={() => setAvatar(i)} aria-label={`Персонаж ${i + 1}`}><Avatar avatar={i}/></button>)}</div>
     <label className="field">ПРОФЕССИЯ <span>Каждый здесь незаменим</span></label><RolePicker value={role} onChange={setRole}/><p className="role-hint">{ROLE_INFO[role].bonus}</p>
     {tab === 'create' && <label className="field">УРОВЕНЬ УГРОЗЫ<select value={difficulty} onChange={e => setDifficulty(e.target.value as Difficulty)}><option value="normal">Выжившие — обычная сложность</option><option value="hard">Ветераны — ресурсы уходят быстрее</option><option value="nightmare">Последний рубеж — нет права на ошибку</option></select></label>}
-    <button className="button primary full" disabled={!game.connected || pending}>{pending ? 'Устанавливаем связь…' : tab === 'create' ? 'Создать убежище' : 'Войти в бункер'}<ArrowRight size={18}/></button><p className="form-note">Без регистрации. Без установки. Только вы и ваша команда.</p></form></section></div>
+    <button className="button primary full" disabled={!game.connected || pending}>{pending ? 'Устанавливаем связь…' : tab === 'create' ? 'Создать убежище' : 'Войти в бункер'}<ArrowRight size={18}/></button><p className="form-note">Без регистрации. Без установки. Только вы и ваша команда.</p></form><label className="import-key">Восстановить персонажа из ключа<input type="file" accept="application/json,.json" onChange={async e => { const file = e.target.files?.[0]; if (!file) return; try { if (file.size > 2048) throw new Error('Неверный файл ключа'); const value = JSON.parse(await file.text()) as Session; await game.send('resume', value); game.remember(value); game.setError(''); } catch (error) { game.setError((error as Error).message); } }}/></label></section></div>
     <footer className="menu-footer"><span>СИГНАЛ ЕЩЁ ЕСТЬ.</span><span>Совместные решения. Общие последствия.</span><span>BUNKER / LAST SHELTER © 2026</span></footer></div>;
 }
 export function Lobby({ game }: { game: GameConnection }) {

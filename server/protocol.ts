@@ -13,7 +13,7 @@ export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('upgrade'), room }),
   z.object({ type: z.literal('build') }),
   z.object({ type: z.literal('use'), item: z.enum(['medkit', 'ration']) }),
-  z.object({ type: z.literal('transfer'), resource: z.enum(Object.keys(RESOURCE_INFO) as [Resource, ...Resource[]]), amount: z.number().int().min(1).max(20), playerId: z.string().uuid() }),
+  z.object({ type: z.literal('give'), item: z.enum(['medkit', 'ration']), amount: z.number().int().min(1).max(5), playerId: z.string().uuid() }),
   z.object({ type: z.literal('expedition'), zone: z.string().max(30), mode: z.enum(['quiet', 'fast']) }),
   z.object({ type: z.literal('join-expedition'), id: z.string().uuid() }),
   z.object({ type: z.literal('vote'), choice: z.number().int().min(0).max(2) }),
