@@ -2,6 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { dnsFailureHelp, readResolvConfig } from './dns-diagnostics.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   freePort,
@@ -15,6 +16,8 @@ import {
 } from './runtime.mjs';
 
 let backend, tunnel, build, temporary;
+let tunnelLog = '';
+const publicUrlState = { url: null, registered: false };
 const stop = shutdownWith(async () => {
   await Promise.all([stopChild(tunnel), stopChild(backend), stopChild(build)]);
   if (temporary) await rm(temporary, { recursive: true, force: true });
@@ -86,10 +89,12 @@ try {
     );
     const collect = (data) => {
       tail = (tail + data.toString()).slice(-16384);
-      const url = quickTunnelUrl(tail);
-      if (url && /Registered tunnel connection/.test(tail)) {
+      tunnelLog = tail;
+      publicUrlState.url ||= quickTunnelUrl(tail);
+      publicUrlState.registered ||= /Registered tunnel connection/.test(tail);
+      if (publicUrlState.url && publicUrlState.registered) {
         clearTimeout(timeout);
-        resolve(url);
+        resolve(publicUrlState.url);
       }
     };
     tunnel.stdout.on('data', collect);
@@ -145,6 +150,12 @@ try {
     'При следующем запуске адрес изменится. Для продолжения скачайте ключ своей сессии в настройках.\n',
   );
 } catch (error) {
-  console.error('[share]', error.message);
+  const dnsHelp = dnsFailureHelp(
+    tunnelLog || error.message,
+    process.platform,
+    await readResolvConfig(),
+  );
+  if (dnsHelp) console.error('[share]', dnsHelp);
+  else console.error('[share]', error.message);
   await stop(1);
 }
