@@ -9,6 +9,7 @@ import {
   projectRoot,
   quickTunnelUrl,
   readPort,
+  readShareOptions,
   recentTunnelErrors,
   shutdownWith,
   spawnNode,
@@ -18,13 +19,15 @@ import {
 
 let backend, tunnel, build, temporary;
 let tunnelLog = '';
-const verbose = process.argv.includes('--verbose');
+let verbose = false;
+let protocol = 'auto';
 const publicUrlState = { url: null, registered: false };
 const stop = shutdownWith(async () => {
   await Promise.all([stopChild(tunnel), stopChild(backend), stopChild(build)]);
   if (temporary) await rm(temporary, { recursive: true, force: true });
 });
 try {
+  ({ verbose, protocol } = readShareOptions(process.argv.slice(2)));
   const binary = process.env.CLOUDFLARED_PATH || 'cloudflared';
   const version = spawnSync(binary, ['--version'], {
     encoding: 'utf8',
@@ -57,6 +60,7 @@ try {
   const config = path.join(temporary, 'config.yml');
   await writeFile(config, '{}\n', { mode: 0o600 });
   console.log('Получаем временный HTTPS-адрес Cloudflare…');
+  console.log(`Транспорт Cloudflare: ${protocol}. Ожидаем подключение до 90 секунд.`);
   if (verbose)
     console.log(
       'Подробный журнал Cloudflare. Ссылка на игру появится в строке ИГРА ДЛЯ ДРУЗЕЙ после проверки готовности.',
@@ -71,7 +75,7 @@ try {
       local,
       '--no-autoupdate',
       '--protocol',
-      'http2',
+      protocol,
       '--metrics',
       '127.0.0.1:0',
       ...(verbose ? ['--loglevel', 'debug'] : []),
@@ -88,11 +92,9 @@ try {
     const timeout = setTimeout(
       () =>
         reject(
-          new Error(
-            'Cloudflare не выдал адрес за 45 секунд. Проверьте доступ к интернету и повторите запуск.',
-          ),
+          new Error('Cloudflare не подтвердил подключение за 90 секунд. Проверьте журнал туннеля.'),
         ),
-      45000,
+      90000,
     );
     const collect = (data) => {
       if (verbose) process.stderr.write(data);
@@ -163,6 +165,10 @@ try {
     console.error('[share]', error.message);
     const details = recentTunnelErrors(tunnelLog);
     if (details) console.error('Сообщения Cloudflare:\n' + details);
+    if (protocol !== 'quic' && /connection with edge closed/.test(tunnelLog))
+      console.error(
+        'Если проверка QUIC проходит, попробуйте: npm run share -- --protocol quic --verbose',
+      );
     if (tunnelLog && !verbose) console.error('Полный журнал: npm run share -- --verbose');
   }
   await stop(1);

@@ -43,6 +43,16 @@ it('explains the one-time Cloudflare installation and fails before advertising a
   expect(running.output()).toContain('установите официальный Cloudflare Tunnel');
   expect(running.output()).not.toContain('ИГРА ДЛЯ ДРУЗЕЙ:');
 });
+it('rejects an invalid protocol before checking Cloudflare or building the game', async () => {
+  const running = run({ CLOUDFLARED_PATH: 'bunker-nonexistent-cloudflared-binary' }, [
+    '--protocol',
+    'tcp',
+  ]);
+  expect(await exit(running.child)).toBe(1);
+  expect(running.output()).toContain('auto, quic или http2');
+  expect(running.output()).not.toContain('Собираем игру');
+  expect(running.output()).not.toContain('ИГРА ДЛЯ ДРУЗЕЙ:');
+});
 it.skipIf(process.platform === 'win32')(
   'serves the real built game for an exact public origin only after a controlled tunnel confirms readiness, then cleans up',
   async () => {
@@ -53,7 +63,7 @@ it.skipIf(process.platform === 'win32')(
     const origin = 'https://local-fixture-test-only.trycloudflare.com';
     await writeFile(
       fixture,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');\nif(process.argv.includes('--version')){console.log('cloudflared test fixture');process.exit(0);}\nconsole.error('| ${origin} |');\nconsole.error('fixture verbose='+process.argv.includes('debug'));\nsetTimeout(()=>{fs.writeFileSync(process.env.BUNKER_TEST_READY,JSON.stringify({at:Date.now(),config:process.argv[process.argv.indexOf('--config')+1]}));console.error('Registered tunnel connection protocol=http2');},1200);\nsetInterval(()=>{},1000);\n`,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');\nif(process.argv.includes('--version')){console.log('cloudflared test fixture');process.exit(0);}\nconst protocol=process.argv[process.argv.indexOf('--protocol')+1];\nconsole.error('| ${origin} |');\nconsole.error('fixture verbose='+process.argv.includes('debug'));\nsetTimeout(()=>{fs.writeFileSync(process.env.BUNKER_TEST_READY,JSON.stringify({at:Date.now(),config:process.argv[process.argv.indexOf('--config')+1],protocol}));console.error('Registered tunnel connection protocol='+protocol);},1200);\nsetInterval(()=>{},1000);\n`,
       { mode: 0o700 },
     );
     const running = run(
@@ -65,7 +75,7 @@ it.skipIf(process.platform === 'win32')(
         NODE_ENV: 'development',
         SAVE_DIR: path.join(dir, 'data'),
       },
-      ['--verbose'],
+      ['--protocol', 'quic', '--verbose'],
     );
     const sockets: Socket[] = [];
     try {
@@ -89,6 +99,7 @@ it.skipIf(process.platform === 'win32')(
       });
       const confirmation = JSON.parse(await readFile(registered, 'utf8'));
       expect(confirmation.at).toBeLessThanOrEqual(Date.now());
+      expect(confirmation.protocol).toBe('quic');
       expect(running.output()).toContain(origin);
       expect(running.output()).toContain('fixture verbose=true');
       const port = Number(running.output().match(/BUNKER server listening on (\d+)/)![1]),

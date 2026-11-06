@@ -1,8 +1,24 @@
 import { createConnection, createServer } from 'node:net';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
+
+export function readShareOptions(args) {
+  const { values } = parseArgs({
+    args,
+    options: {
+      protocol: { type: 'string', default: 'auto' },
+      verbose: { type: 'boolean', default: false },
+    },
+  });
+  if (!['auto', 'quic', 'http2'].includes(values.protocol))
+    throw new Error(
+      'Протокол Cloudflare: auto, quic или http2. Пример: npm run share -- --protocol quic',
+    );
+  return { protocol: values.protocol, verbose: values.verbose };
+}
 
 export function readPort(value, fallback) {
   const port = value === undefined || value === '' ? fallback : Number(value);

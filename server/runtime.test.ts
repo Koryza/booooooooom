@@ -5,10 +5,24 @@ import {
   originsForDev,
   quickTunnelUrl,
   readPort,
+  readShareOptions,
   recentTunnelErrors,
 } from '../scripts/runtime.mjs';
 
 describe('startup addresses', () => {
+  it('uses automatic tunnel transport and allows an explicit QUIC or HTTP/2 selection', () => {
+    expect(readShareOptions([])).toEqual({ protocol: 'auto', verbose: false });
+    expect(readShareOptions(['--protocol', 'quic', '--verbose'])).toEqual({
+      protocol: 'quic',
+      verbose: true,
+    });
+    expect(readShareOptions(['--protocol=http2'])).toEqual({ protocol: 'http2', verbose: false });
+  });
+  it('rejects invalid or missing protocol values rather than silently forcing HTTP/2', () => {
+    expect(() => readShareOptions(['--protocol', 'tcp'])).toThrow('auto, quic или http2');
+    expect(() => readShareOptions(['--protocol'])).toThrow();
+    expect(() => readShareOptions(['--protokol', 'quic'])).toThrow();
+  });
   it('keeps the edge connection cause before shutdown messages without dumping settings', () => {
     const cause = '2026-11-06T16:25:13Z ERR TLS handshake failed: remote error';
     const log = [
