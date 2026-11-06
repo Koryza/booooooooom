@@ -1,8 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:net';
-import { freePort, originsForDev, quickTunnelUrl, readPort } from '../scripts/runtime.mjs';
+import {
+  freePort,
+  originsForDev,
+  quickTunnelUrl,
+  readPort,
+  recentTunnelErrors,
+} from '../scripts/runtime.mjs';
 
 describe('startup addresses', () => {
+  it('keeps the edge connection cause before shutdown messages without dumping settings', () => {
+    const cause = '2026-11-06T16:25:13Z ERR TLS handshake failed: remote error';
+    const log = [
+      'INF Settings: private configuration',
+      cause,
+      'ERR Initiating shutdown error="connection with edge closed"',
+      'INF Metrics server stopped',
+      'connection with edge closed',
+    ].join('\n');
+    expect(recentTunnelErrors(log)).toContain(cause);
+    expect(recentTunnelErrors(log)).toContain('connection with edge closed');
+    expect(recentTunnelErrors(log)).not.toContain('private configuration');
+    expect(recentTunnelErrors(log)).not.toContain('Metrics server stopped');
+  });
   it('chooses a free port without closing an existing listener', async () => {
     const busy = createServer();
     await new Promise<void>((resolve) => busy.listen(0, '0.0.0.0', resolve));

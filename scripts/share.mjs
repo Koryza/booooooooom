@@ -9,6 +9,7 @@ import {
   projectRoot,
   quickTunnelUrl,
   readPort,
+  recentTunnelErrors,
   shutdownWith,
   spawnNode,
   stopChild,
@@ -17,6 +18,7 @@ import {
 
 let backend, tunnel, build, temporary;
 let tunnelLog = '';
+const verbose = process.argv.includes('--verbose');
 const publicUrlState = { url: null, registered: false };
 const stop = shutdownWith(async () => {
   await Promise.all([stopChild(tunnel), stopChild(backend), stopChild(build)]);
@@ -55,6 +57,10 @@ try {
   const config = path.join(temporary, 'config.yml');
   await writeFile(config, '{}\n', { mode: 0o600 });
   console.log('Получаем временный HTTPS-адрес Cloudflare…');
+  if (verbose)
+    console.log(
+      'Подробный журнал Cloudflare. Ссылка на игру появится в строке ИГРА ДЛЯ ДРУЗЕЙ после проверки готовности.',
+    );
   tunnel = spawn(
     binary,
     [
@@ -68,6 +74,7 @@ try {
       'http2',
       '--metrics',
       '127.0.0.1:0',
+      ...(verbose ? ['--loglevel', 'debug'] : []),
     ],
     {
       cwd: projectRoot,
@@ -88,6 +95,7 @@ try {
       45000,
     );
     const collect = (data) => {
+      if (verbose) process.stderr.write(data);
       tail = (tail + data.toString()).slice(-16384);
       tunnelLog = tail;
       publicUrlState.url ||= quickTunnelUrl(tail);
@@ -105,12 +113,7 @@ try {
     });
     tunnel.once('exit', () => {
       clearTimeout(timeout);
-      reject(
-        new Error(
-          'Cloudflare завершился до выдачи ссылки. ' +
-            tail.split('\n').filter(Boolean).slice(-3).join('\n'),
-        ),
-      );
+      reject(new Error('Cloudflare завершился до подтверждения подключения.'));
     });
   });
   const origins = [
@@ -156,6 +159,11 @@ try {
     await readResolvConfig(),
   );
   if (dnsHelp) console.error('[share]', dnsHelp);
-  else console.error('[share]', error.message);
+  else {
+    console.error('[share]', error.message);
+    const details = recentTunnelErrors(tunnelLog);
+    if (details) console.error('Сообщения Cloudflare:\n' + details);
+    if (tunnelLog && !verbose) console.error('Полный журнал: npm run share -- --verbose');
+  }
   await stop(1);
 }

@@ -113,6 +113,14 @@ export function quickTunnelUrl(text) {
   );
 }
 
+export function recentTunnelErrors(log) {
+  return [...new Set(log.split(/\r?\n/).map((line) => line.trim()))]
+    .filter((line) => /\b(?:ERR|WRN)\b|connection with edge closed/.test(line))
+    .slice(-12)
+    .map((line) => line.slice(0, 2048))
+    .join('\n');
+}
+
 export async function waitForPortClosed(port, host = '127.0.0.1') {
   const deadline = Date.now() + 12000;
   while (Date.now() < deadline) {

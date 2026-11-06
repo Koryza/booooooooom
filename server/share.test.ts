@@ -13,8 +13,8 @@ afterEach(() => {
   for (const child of children.splice(0))
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
 });
-function run(env: NodeJS.ProcessEnv) {
-  const child = spawn(process.execPath, ['scripts/share.mjs'], {
+function run(env: NodeJS.ProcessEnv, args: string[] = []) {
+  const child = spawn(process.execPath, ['scripts/share.mjs', ...args], {
     cwd: root,
     env: { ...process.env, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -53,17 +53,20 @@ it.skipIf(process.platform === 'win32')(
     const origin = 'https://local-fixture-test-only.trycloudflare.com';
     await writeFile(
       fixture,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');\nif(process.argv.includes('--version')){console.log('cloudflared test fixture');process.exit(0);}\nconsole.error('| ${origin} |');\nsetTimeout(()=>{fs.writeFileSync(process.env.BUNKER_TEST_READY,JSON.stringify({at:Date.now(),config:process.argv[process.argv.indexOf('--config')+1]}));console.error('Registered tunnel connection protocol=http2');},1200);\nsetInterval(()=>{},1000);\n`,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');\nif(process.argv.includes('--version')){console.log('cloudflared test fixture');process.exit(0);}\nconsole.error('| ${origin} |');\nconsole.error('fixture verbose='+process.argv.includes('debug'));\nsetTimeout(()=>{fs.writeFileSync(process.env.BUNKER_TEST_READY,JSON.stringify({at:Date.now(),config:process.argv[process.argv.indexOf('--config')+1]}));console.error('Registered tunnel connection protocol=http2');},1200);\nsetInterval(()=>{},1000);\n`,
       { mode: 0o700 },
     );
-    const running = run({
-      CLOUDFLARED_PATH: fixture,
-      BUNKER_TEST_READY: registered,
-      npm_execpath: process.env.npm_execpath || '',
-      DATABASE_URL: '',
-      NODE_ENV: 'development',
-      SAVE_DIR: path.join(dir, 'data'),
-    });
+    const running = run(
+      {
+        CLOUDFLARED_PATH: fixture,
+        BUNKER_TEST_READY: registered,
+        npm_execpath: process.env.npm_execpath || '',
+        DATABASE_URL: '',
+        NODE_ENV: 'development',
+        SAVE_DIR: path.join(dir, 'data'),
+      },
+      ['--verbose'],
+    );
     const sockets: Socket[] = [];
     try {
       await new Promise<void>((resolve, reject) => {
@@ -87,6 +90,7 @@ it.skipIf(process.platform === 'win32')(
       const confirmation = JSON.parse(await readFile(registered, 'utf8'));
       expect(confirmation.at).toBeLessThanOrEqual(Date.now());
       expect(running.output()).toContain(origin);
+      expect(running.output()).toContain('fixture verbose=true');
       const port = Number(running.output().match(/BUNKER server listening on (\d+)/)![1]),
         base = `http://127.0.0.1:${port}`;
       expect((await (await fetch(base + '/api/health')).json()).mode).toBe('social');
