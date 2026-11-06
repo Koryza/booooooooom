@@ -61,6 +61,7 @@ try {
   await writeFile(config, '{}\n', { mode: 0o600 });
   console.log('Получаем временный HTTPS-адрес Cloudflare…');
   console.log(`Транспорт Cloudflare: ${protocol}. Ожидаем подключение до 90 секунд.`);
+  console.log('На запрос регистрации Cloudflare отводится до 30 секунд.');
   if (verbose)
     console.log(
       'Подробный журнал Cloudflare. Ссылка на игру появится в строке ИГРА ДЛЯ ДРУЗЕЙ после проверки готовности.',
@@ -76,6 +77,8 @@ try {
       '--no-autoupdate',
       '--protocol',
       protocol,
+      '--rpc-timeout',
+      '30s',
       '--metrics',
       '127.0.0.1:0',
       ...(verbose ? ['--loglevel', 'debug'] : []),

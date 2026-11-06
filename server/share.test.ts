@@ -63,7 +63,7 @@ it.skipIf(process.platform === 'win32')(
     const origin = 'https://local-fixture-test-only.trycloudflare.com';
     await writeFile(
       fixture,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');\nif(process.argv.includes('--version')){console.log('cloudflared test fixture');process.exit(0);}\nconst protocol=process.argv[process.argv.indexOf('--protocol')+1];\nconsole.error('| ${origin} |');\nconsole.error('fixture verbose='+process.argv.includes('debug'));\nsetTimeout(()=>{fs.writeFileSync(process.env.BUNKER_TEST_READY,JSON.stringify({at:Date.now(),config:process.argv[process.argv.indexOf('--config')+1],protocol}));console.error('Registered tunnel connection protocol='+protocol);},1200);\nsetInterval(()=>{},1000);\n`,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');\nif(process.argv.includes('--version')){console.log('cloudflared test fixture');process.exit(0);}\nconst protocol=process.argv[process.argv.indexOf('--protocol')+1];\nconst rpcTimeout=process.argv[process.argv.indexOf('--rpc-timeout')+1];\nconsole.error('| ${origin} |');\nconsole.error('fixture verbose='+process.argv.includes('debug'));\nsetTimeout(()=>{fs.writeFileSync(process.env.BUNKER_TEST_READY,JSON.stringify({at:Date.now(),config:process.argv[process.argv.indexOf('--config')+1],protocol,rpcTimeout}));console.error('Registered tunnel connection protocol='+protocol);},1200);\nsetInterval(()=>{},1000);\n`,
       { mode: 0o700 },
     );
     const running = run(
@@ -100,6 +100,7 @@ it.skipIf(process.platform === 'win32')(
       const confirmation = JSON.parse(await readFile(registered, 'utf8'));
       expect(confirmation.at).toBeLessThanOrEqual(Date.now());
       expect(confirmation.protocol).toBe('quic');
+      expect(confirmation.rpcTimeout).toBe('30s');
       expect(running.output()).toContain(origin);
       expect(running.output()).toContain('fixture verbose=true');
       const port = Number(running.output().match(/BUNKER server listening on (\d+)/)![1]),
