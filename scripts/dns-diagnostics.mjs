@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { isIP } from 'node:net';
 
+const dnsError = /(Could not lookup srv records|\blookup\s+\S+|\bno such host\b)/i;
+
 export function resolvNameservers(contents) {
   return [
     ...new Set(
@@ -25,12 +27,36 @@ export async function readResolvConfig(path = '/etc/resolv.conf') {
 }
 
 export function dnsFailureHelp(log, platform, config) {
-  if (!/(Could not lookup srv records|\blookup\s+\S+|\bno such host\b)/i.test(log)) return null;
+  if (!dnsError.test(log)) return null;
+  const details = [
+    'Сообщение Cloudflare:',
+    ...[
+      ...new Set(
+        log
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => dnsError.test(line)),
+      ),
+    ]
+      .slice(-2)
+      .map((line) => line.slice(0, 2048)),
+    ...(platform === 'darwin' || platform === 'linux'
+      ? [
+          config.readable
+            ? `DNS в /etc/resolv.conf: ${config.servers.join(', ') || 'не указаны'}`
+            : config.missing
+              ? 'Файл /etc/resolv.conf не найден.'
+              : 'Не удалось прочитать /etc/resolv.conf.',
+        ]
+      : []),
+    '',
+  ];
   const refusedLocal = /(?:\[::1\]|127\.0\.0\.1):53/.test(log) && /connection refused/i.test(log);
   const noNameservers = config.missing || (config.readable && config.servers.length === 0);
   if (platform === 'darwin' && (refusedLocal || noNameservers)) {
     const message = [
       'Cloudflare не может найти DNS-записи туннеля.',
+      ...details,
       ...(noNameservers
         ? [
             config.missing
@@ -61,6 +87,7 @@ export function dnsFailureHelp(log, platform, config) {
   }
   return [
     'Cloudflare не смог разрешить DNS-имя службы туннеля.',
+    ...details,
     'Проверьте доступность DNS и сети. Новая сборка игры сама по себе эту ошибку не исправит.',
     'Публичная ссылка не запущена.',
   ].join('\n');

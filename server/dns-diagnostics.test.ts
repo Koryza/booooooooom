@@ -65,6 +65,33 @@ describe('Cloudflare DNS diagnostics', () => {
     expect(help).toContain('локальному DNS');
     expect(help).not.toContain('sudo tee');
   });
+  it('retains the exact DNS timeout and configured servers after nameserver records have been restored', () => {
+    const failure =
+      'Could not lookup srv records on _v2-origintunneld._tcp.argotunnel.com: lookup _v2-origintunneld._tcp.argotunnel.com on 1.1.1.1:53: read udp 192.168.1.5:55542->1.1.1.1:53: i/o timeout';
+    const help = dnsFailureHelp(failure, 'darwin', {
+      readable: true,
+      missing: false,
+      servers: ['1.1.1.1', '1.0.0.1'],
+    });
+    expect(help).toContain(failure);
+    expect(help).toContain('DNS в /etc/resolv.conf: 1.1.1.1, 1.0.0.1');
+    expect(help).not.toContain('sudo');
+    expect(help).toContain('Публичная ссылка не запущена');
+  });
+  it('shows an API lookup failure without dumping unrelated tunnel settings or advertising an unregistered URL', () => {
+    const failure =
+      'failed to request quick Tunnel: lookup api.trycloudflare.com on 1.0.0.1:53: no such host';
+    const help = dnsFailureHelp(
+      `Settings: private setting\n| https://unregistered-example.trycloudflare.com |\n${failure}\nMetrics server stopped\n${failure}`,
+      'darwin',
+      { readable: true, missing: false, servers: ['1.0.0.1'] },
+    );
+    expect(help).toContain(failure);
+    expect(help?.split(failure)).toHaveLength(2);
+    expect(help).not.toContain('private setting');
+    expect(help).not.toContain('unregistered-example');
+    expect(help).not.toContain('sudo');
+  });
   it('does not confuse an unreadable config with an empty one', () => {
     const help = dnsFailureHelp(original, 'darwin', {
       readable: false,
