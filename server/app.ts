@@ -11,6 +11,7 @@ import { newState, newPlayer, log } from './state.js';
 import { commandSchema } from './protocol.js';
 import { Engine } from './engine.js';
 import type { Snapshot, Store } from './store.js';
+import { staticClient } from './static-client.js';
 
 const hash = (s: string) => createHash('sha256').update(s).digest('hex');
 type Runtime = Snapshot & { engine: Engine; lastEmpty: number };
@@ -336,8 +337,7 @@ export function createGameServer(store: Store, options: { tick?: boolean; origin
   );
   const clientPath = fileURLToPath(new URL('../../client', import.meta.url));
   if (import.meta.url.includes('/dist/') && existsSync(clientPath + '/index.html')) {
-    app.use(express.static(clientPath, { index: false }));
-    app.get('/{*path}', (_req, res) => res.sendFile(clientPath + '/index.html'));
+    app.use(staticClient(clientPath));
   }
   return {
     http,
