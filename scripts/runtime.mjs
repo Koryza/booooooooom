@@ -9,15 +9,53 @@ export function readShareOptions(args) {
   const { values } = parseArgs({
     args,
     options: {
+      provider: { type: 'string', default: 'cloudflare' },
       protocol: { type: 'string', default: 'auto' },
       verbose: { type: 'boolean', default: false },
     },
   });
+  if (!['cloudflare', 'localhostrun'].includes(values.provider))
+    throw new Error(
+      'Сервис туннеля: cloudflare или localhostrun. Пример: npm run share -- --provider localhostrun',
+    );
   if (!['auto', 'quic', 'http2'].includes(values.protocol))
     throw new Error(
       'Протокол Cloudflare: auto, quic или http2. Пример: npm run share -- --protocol quic',
     );
-  return { protocol: values.protocol, verbose: values.verbose };
+  if (values.provider === 'localhostrun' && values.protocol !== 'auto')
+    throw new Error(
+      'Параметр --protocol используется с Cloudflare. Для SSH: npm run share -- --provider localhostrun',
+    );
+  return { provider: values.provider, protocol: values.protocol, verbose: values.verbose };
+}
+
+export function sshTunnelArgs(port) {
+  return [
+    '-F',
+    'none',
+    '-T',
+    '-o',
+    'StrictHostKeyChecking=ask',
+    '-o',
+    'ExitOnForwardFailure=yes',
+    '-o',
+    'ServerAliveInterval=30',
+    '-o',
+    'ServerAliveCountMax=3',
+    '-o',
+    'ConnectTimeout=20',
+    '-o',
+    'ForwardAgent=no',
+    '-o',
+    'PubkeyAuthentication=no',
+    '-o',
+    'PasswordAuthentication=no',
+    '-o',
+    'KbdInteractiveAuthentication=no',
+    '-R',
+    `80:127.0.0.1:${readPort(port, 3001)}`,
+    'nokey@localhost.run',
+  ];
 }
 
 export function readPort(value, fallback) {
@@ -127,6 +165,17 @@ export function quickTunnelUrl(text) {
   return (
     text.match(/https:\/\/[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com(?=[\s|]|$)/)?.[0] || null
   );
+}
+
+export function localhostRunUrl(text) {
+  for (const line of text.replace(/\x1b\[[0-9;]*m/g, '').split(/\r?\n/)) {
+    if (!/\btunneled with tls termination,/i.test(line)) continue;
+    const url = line.match(
+      /https:\/\/[a-z0-9]+(?:-[a-z0-9]+)*\.(?:lhr\.life|localhost\.run)(?=[\s|,"']|$)/i,
+    )?.[0];
+    if (url) return url.toLowerCase();
+  }
+  return null;
 }
 
 export function recentTunnelErrors(log) {

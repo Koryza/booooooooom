@@ -6,12 +6,14 @@ import { dnsFailureHelp, readResolvConfig } from './dns-diagnostics.mjs';
 import { fileURLToPath } from 'node:url';
 import {
   freePort,
+  localhostRunUrl,
   projectRoot,
   quickTunnelUrl,
   readPort,
   readShareOptions,
   recentTunnelErrors,
   shutdownWith,
+  sshTunnelArgs,
   spawnNode,
   stopChild,
   waitForApp,
@@ -21,20 +23,30 @@ let backend, tunnel, build, temporary;
 let tunnelLog = '';
 let verbose = false;
 let protocol = 'auto';
+let provider = 'cloudflare';
+let label = 'Cloudflare';
 const publicUrlState = { url: null, registered: false };
 const stop = shutdownWith(async () => {
   await Promise.all([stopChild(tunnel), stopChild(backend), stopChild(build)]);
   if (temporary) await rm(temporary, { recursive: true, force: true });
 });
 try {
-  ({ verbose, protocol } = readShareOptions(process.argv.slice(2)));
-  const binary = process.env.CLOUDFLARED_PATH || 'cloudflared';
-  const version = spawnSync(binary, ['--version'], {
+  ({ verbose, protocol, provider } = readShareOptions(process.argv.slice(2)));
+  const useSSH = provider === 'localhostrun';
+  label = useSSH ? 'localhost.run' : 'Cloudflare';
+  const binary = useSSH
+    ? process.env.BUNKER_SSH_PATH || 'ssh'
+    : process.env.CLOUDFLARED_PATH || 'cloudflared';
+  const version = spawnSync(binary, useSSH ? ['-V'] : ['--version'], {
     encoding: 'utf8',
     timeout: 10000,
     windowsHide: true,
   });
   if (version.error || version.status !== 0) {
+    if (useSSH)
+      throw new Error(
+        'Не найден OpenSSH (ssh). На Mac он обычно уже установлен; на Windows включите компонент «Клиент OpenSSH». BUNKER_SSH_PATH позволяет задать полный путь к ssh.',
+      );
     console.error('Для публичной ссылки установите официальный Cloudflare Tunnel один раз:\n');
     if (process.platform === 'darwin') console.error('  brew install cloudflared');
     else if (process.platform === 'win32')
@@ -56,37 +68,51 @@ try {
   });
   const port = await freePort(readPort(process.env.PORT, 3001), '127.0.0.1');
   const local = `http://127.0.0.1:${port}`;
-  temporary = await mkdtemp(path.join(tmpdir(), 'bunker-share-'));
-  const config = path.join(temporary, 'config.yml');
-  await writeFile(config, '{}\n', { mode: 0o600 });
-  console.log('Получаем временный HTTPS-адрес Cloudflare…');
-  console.log(`Транспорт Cloudflare: ${protocol}. Ожидаем подключение до 90 секунд.`);
-  console.log('На запрос регистрации Cloudflare отводится до 30 секунд.');
+  let config;
+  if (!useSSH) {
+    temporary = await mkdtemp(path.join(tmpdir(), 'bunker-share-'));
+    config = path.join(temporary, 'config.yml');
+    await writeFile(config, '{}\n', { mode: 0o600 });
+  }
+  console.log(`Получаем временный HTTPS-адрес ${label}…`);
+  if (useSSH) {
+    console.log(
+      'OpenSSH может запросить подтверждение ключа сервера localhost.run при первом подключении.',
+    );
+    console.log(
+      'Проверка ключа включена; подключение использует бесплатный режим nokey без ваших SSH-ключей.',
+    );
+  } else {
+    console.log(`Транспорт Cloudflare: ${protocol}. Ожидаем подключение до 90 секунд.`);
+    console.log('На запрос регистрации Cloudflare отводится до 30 секунд.');
+  }
   if (verbose)
     console.log(
-      'Подробный журнал Cloudflare. Ссылка на игру появится в строке ИГРА ДЛЯ ДРУЗЕЙ после проверки готовности.',
+      `Подробный журнал ${label}. Ссылка на игру появится в строке ИГРА ДЛЯ ДРУЗЕЙ после проверки готовности.`,
     );
   tunnel = spawn(
     binary,
-    [
-      'tunnel',
-      '--config',
-      config,
-      '--url',
-      local,
-      '--no-autoupdate',
-      '--protocol',
-      protocol,
-      '--rpc-timeout',
-      '30s',
-      '--metrics',
-      '127.0.0.1:0',
-      ...(verbose ? ['--loglevel', 'debug'] : []),
-    ],
+    useSSH
+      ? sshTunnelArgs(port)
+      : [
+          'tunnel',
+          '--config',
+          config,
+          '--url',
+          local,
+          '--no-autoupdate',
+          '--protocol',
+          protocol,
+          '--rpc-timeout',
+          '30s',
+          '--metrics',
+          '127.0.0.1:0',
+          ...(verbose ? ['--loglevel', 'debug'] : []),
+        ],
     {
       cwd: projectRoot,
       env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [useSSH ? 'inherit' : 'ignore', 'pipe', 'pipe'],
       windowsHide: true,
     },
   );
@@ -95,7 +121,7 @@ try {
     const timeout = setTimeout(
       () =>
         reject(
-          new Error('Cloudflare не подтвердил подключение за 90 секунд. Проверьте журнал туннеля.'),
+          new Error(`${label} не подтвердил подключение за 90 секунд. Проверьте журнал туннеля.`),
         ),
       90000,
     );
@@ -103,22 +129,27 @@ try {
       if (verbose) process.stderr.write(data);
       tail = (tail + data.toString()).slice(-16384);
       tunnelLog = tail;
-      publicUrlState.url ||= quickTunnelUrl(tail);
-      publicUrlState.registered ||= /Registered tunnel connection/.test(tail);
+      publicUrlState.url ||= useSSH ? localhostRunUrl(tail) : quickTunnelUrl(tail);
+      publicUrlState.registered ||= useSSH
+        ? Boolean(publicUrlState.url)
+        : /Registered tunnel connection/.test(tail);
       if (publicUrlState.url && publicUrlState.registered) {
         clearTimeout(timeout);
         resolve(publicUrlState.url);
       }
     };
     tunnel.stdout.on('data', collect);
-    tunnel.stderr.on('data', collect);
+    tunnel.stderr.on('data', (data) => {
+      if (useSSH && !verbose) process.stderr.write(data);
+      collect(data);
+    });
     tunnel.once('error', (error) => {
       clearTimeout(timeout);
       reject(error);
     });
     tunnel.once('exit', () => {
       clearTimeout(timeout);
-      reject(new Error('Cloudflare завершился до подтверждения подключения.'));
+      reject(new Error(`${label} завершился до подтверждения подключения.`));
     });
   });
   const origins = [
@@ -144,7 +175,7 @@ try {
   });
   backend.once('exit', (code) => void stop(code || 0));
   tunnel.once('exit', () => {
-    console.error('Публичный туннель остановлен. Запустите npm run share заново.');
+    console.error(`Публичный туннель ${label} остановлен. Повторите команду запуска.`);
     void stop(1);
   });
   await waitForApp(local, backend);
@@ -158,21 +189,28 @@ try {
     'При следующем запуске адрес изменится. Для продолжения скачайте ключ своей сессии в настройках.\n',
   );
 } catch (error) {
-  const dnsHelp = dnsFailureHelp(
-    tunnelLog || error.message,
-    process.platform,
-    await readResolvConfig(),
-  );
+  const dnsHelp =
+    provider === 'cloudflare'
+      ? dnsFailureHelp(tunnelLog || error.message, process.platform, await readResolvConfig())
+      : null;
   if (dnsHelp) console.error('[share]', dnsHelp);
   else {
     console.error('[share]', error.message);
-    const details = recentTunnelErrors(tunnelLog);
-    if (details) console.error('Сообщения Cloudflare:\n' + details);
-    if (protocol !== 'quic' && /connection with edge closed/.test(tunnelLog))
+    const details =
+      provider === 'localhostrun'
+        ? tunnelLog.split('\n').filter(Boolean).slice(-8).join('\n')
+        : recentTunnelErrors(tunnelLog);
+    if (details) console.error(`Сообщения ${label}:\n` + details);
+    if (
+      provider === 'cloudflare' &&
+      protocol !== 'quic' &&
+      /connection with edge closed/.test(tunnelLog)
+    )
       console.error(
         'Если проверка QUIC проходит, попробуйте: npm run share -- --protocol quic --verbose',
       );
-    if (tunnelLog && !verbose) console.error('Полный журнал: npm run share -- --verbose');
+    if (tunnelLog && !verbose)
+      console.error(`Полный журнал: npm run share -- --provider ${provider} --verbose`);
   }
   await stop(1);
 }

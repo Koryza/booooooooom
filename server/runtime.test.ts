@@ -2,26 +2,85 @@ import { describe, expect, it } from 'vitest';
 import { createServer } from 'node:net';
 import {
   freePort,
+  localhostRunUrl,
   originsForDev,
   quickTunnelUrl,
   readPort,
   readShareOptions,
   recentTunnelErrors,
+  sshTunnelArgs,
 } from '../scripts/runtime.mjs';
 
 describe('startup addresses', () => {
   it('uses automatic tunnel transport and allows an explicit QUIC or HTTP/2 selection', () => {
-    expect(readShareOptions([])).toEqual({ protocol: 'auto', verbose: false });
+    expect(readShareOptions([])).toEqual({
+      provider: 'cloudflare',
+      protocol: 'auto',
+      verbose: false,
+    });
     expect(readShareOptions(['--protocol', 'quic', '--verbose'])).toEqual({
+      provider: 'cloudflare',
       protocol: 'quic',
       verbose: true,
     });
-    expect(readShareOptions(['--protocol=http2'])).toEqual({ protocol: 'http2', verbose: false });
+    expect(readShareOptions(['--protocol=http2'])).toEqual({
+      provider: 'cloudflare',
+      protocol: 'http2',
+      verbose: false,
+    });
+    expect(readShareOptions(['--provider', 'localhostrun'])).toEqual({
+      provider: 'localhostrun',
+      protocol: 'auto',
+      verbose: false,
+    });
   });
   it('rejects invalid or missing protocol values rather than silently forcing HTTP/2', () => {
     expect(() => readShareOptions(['--protocol', 'tcp'])).toThrow('auto, quic или http2');
     expect(() => readShareOptions(['--protocol'])).toThrow();
     expect(() => readShareOptions(['--protokol', 'quic'])).toThrow();
+    expect(() => readShareOptions(['--provider', 'unknown'])).toThrow(
+      'cloudflare или localhostrun',
+    );
+    expect(() => readShareOptions(['--provider', 'localhostrun', '--protocol', 'quic'])).toThrow(
+      'Параметр --protocol',
+    );
+  });
+  it('routes the SSH gateway to the selected loopback port with host verification and without key or password authentication', () => {
+    const args = sshTunnelArgs(3012);
+    expect(args).toContain('80:127.0.0.1:3012');
+    expect(args.at(-1)).toBe('nokey@localhost.run');
+    for (const option of [
+      'StrictHostKeyChecking=ask',
+      'ExitOnForwardFailure=yes',
+      'ForwardAgent=no',
+      'PubkeyAuthentication=no',
+      'PasswordAuthentication=no',
+      'KbdInteractiveAuthentication=no',
+    ])
+      expect(args).toContain(option);
+    expect(() => sshTunnelArgs('3012:otherhost')).toThrow('Порт');
+  });
+  it('accepts the HTTPS address from a confirmed localhost.run forwarding message', () => {
+    expect(
+      localhostRunUrl(
+        'sample-name.lhr.life tunneled with tls termination, https://sample-name.lhr.life\r\n',
+      ),
+    ).toBe('https://sample-name.lhr.life');
+    expect(
+      localhostRunUrl(
+        '\x1b[32msample-name.localhost.run tunneled with tls termination, https://sample-name.localhost.run\x1b[0m',
+      ),
+    ).toBe('https://sample-name.localhost.run');
+  });
+  it('does not treat documentation, an unconfirmed address, HTTP or lookalike domains as SSH tunnel readiness', () => {
+    for (const log of [
+      'https://admin.localhost.run',
+      'https://sample-name.lhr.life',
+      'sample tunneled with tls termination, http://sample-name.lhr.life',
+      'sample tunneled with tls termination, https://sample-name.lhr.life.evil.example',
+      'sample tunneled with tls termination, https://other.example',
+    ])
+      expect(localhostRunUrl(log)).toBeNull();
   });
   it('keeps the edge connection cause before shutdown messages without dumping settings', () => {
     const cause = '2026-11-06T16:25:13Z ERR TLS handshake failed: remote error';

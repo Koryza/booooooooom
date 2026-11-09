@@ -53,29 +53,53 @@ it('rejects an invalid protocol before checking Cloudflare or building the game'
   expect(running.output()).not.toContain('Собираем игру');
   expect(running.output()).not.toContain('ИГРА ДЛЯ ДРУЗЕЙ:');
 });
-it.skipIf(process.platform === 'win32')(
-  'serves the real built game for an exact public origin only after a controlled tunnel confirms readiness, then cleans up',
-  async () => {
+it('explains a missing SSH client independently of Cloudflare', async () => {
+  const running = run(
+    {
+      BUNKER_SSH_PATH: path.join(tmpdir(), 'bunker-nonexistent-ssh-binary'),
+      CLOUDFLARED_PATH: path.join(tmpdir(), 'bunker-nonexistent-cloudflared-binary'),
+    },
+    ['--provider', 'localhostrun'],
+  );
+  expect(await exit(running.child)).toBe(1);
+  expect(running.output()).toContain('Не найден OpenSSH');
+  expect(running.output()).not.toContain('установите официальный Cloudflare');
+  expect(running.output()).not.toContain('Собираем игру');
+  expect(running.output()).not.toContain('ИГРА ДЛЯ ДРУЗЕЙ:');
+});
+it.skipIf(process.platform === 'win32').each(['cloudflare', 'localhostrun'])(
+  'serves the real built game via %s for an exact public origin only after a controlled tunnel confirms readiness, then cleans up',
+  async (provider) => {
     // This local process fixture exercises orchestration and public-origin handling, not Cloudflare's external network.
     const dir = await mkdtemp(path.join(tmpdir(), 'bunker-share-test-')),
       fixture = path.join(dir, 'cloudflared'),
       registered = path.join(dir, 'registered.json');
-    const origin = 'https://local-fixture-test-only.trycloudflare.com';
+    const origin =
+      provider === 'cloudflare'
+        ? 'https://local-fixture-test-only.trycloudflare.com'
+        : 'https://local-fixture-test-only.lhr.life';
+    const readyMessage =
+      provider === 'cloudflare'
+        ? 'Registered tunnel connection protocol=quic'
+        : `local-fixture-test-only.lhr.life tunneled with tls termination, ${origin}`;
     await writeFile(
       fixture,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');\nif(process.argv.includes('--version')){console.log('cloudflared test fixture');process.exit(0);}\nconst protocol=process.argv[process.argv.indexOf('--protocol')+1];\nconst rpcTimeout=process.argv[process.argv.indexOf('--rpc-timeout')+1];\nconsole.error('| ${origin} |');\nconsole.error('fixture verbose='+process.argv.includes('debug'));\nsetTimeout(()=>{fs.writeFileSync(process.env.BUNKER_TEST_READY,JSON.stringify({at:Date.now(),config:process.argv[process.argv.indexOf('--config')+1],protocol,rpcTimeout}));console.error('Registered tunnel connection protocol='+protocol);},1200);\nsetInterval(()=>{},1000);\n`,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');\nif(process.argv.includes('--version')||process.argv.includes('-V')){console.log('tunnel test fixture');process.exit(0);}\nconst protocol=process.argv[process.argv.indexOf('--protocol')+1];\nconst rpcTimeout=process.argv[process.argv.indexOf('--rpc-timeout')+1];\nconsole.error('| ${provider === 'cloudflare' ? origin : 'https://admin.localhost.run'} |');\nconsole.error('fixture verbose='+process.argv.includes('debug'));\nsetTimeout(()=>{fs.writeFileSync(process.env.BUNKER_TEST_READY,JSON.stringify({at:Date.now(),config:${provider === 'cloudflare' ? "process.argv[process.argv.indexOf('--config')+1]" : 'null'},protocol,rpcTimeout,args:process.argv.slice(2)}));console.error(${JSON.stringify(readyMessage)});},1200);\nsetInterval(()=>{},1000);\n`,
       { mode: 0o700 },
     );
     const running = run(
       {
-        CLOUDFLARED_PATH: fixture,
+        CLOUDFLARED_PATH: provider === 'cloudflare' ? fixture : path.join(dir, 'no-cloudflared'),
+        BUNKER_SSH_PATH: provider === 'localhostrun' ? fixture : path.join(dir, 'no-ssh'),
         BUNKER_TEST_READY: registered,
         npm_execpath: process.env.npm_execpath || '',
         DATABASE_URL: '',
         NODE_ENV: 'development',
         SAVE_DIR: path.join(dir, 'data'),
       },
-      ['--protocol', 'quic', '--verbose'],
+      provider === 'cloudflare'
+        ? ['--protocol', 'quic', '--verbose']
+        : ['--provider', 'localhostrun', '--verbose'],
     );
     const sockets: Socket[] = [];
     try {
@@ -99,12 +123,19 @@ it.skipIf(process.platform === 'win32')(
       });
       const confirmation = JSON.parse(await readFile(registered, 'utf8'));
       expect(confirmation.at).toBeLessThanOrEqual(Date.now());
-      expect(confirmation.protocol).toBe('quic');
-      expect(confirmation.rpcTimeout).toBe('30s');
+      if (provider === 'cloudflare') {
+        expect(confirmation.protocol).toBe('quic');
+        expect(confirmation.rpcTimeout).toBe('30s');
+        expect(running.output()).toContain('fixture verbose=true');
+      }
       expect(running.output()).toContain(origin);
-      expect(running.output()).toContain('fixture verbose=true');
       const port = Number(running.output().match(/BUNKER server listening on (\d+)/)![1]),
         base = `http://127.0.0.1:${port}`;
+      if (provider === 'localhostrun') {
+        expect(confirmation.args[confirmation.args.indexOf('-R') + 1]).toBe(`80:127.0.0.1:${port}`);
+        expect(confirmation.args).toContain('StrictHostKeyChecking=ask');
+        expect(confirmation.args).toContain('nokey@localhost.run');
+      }
       expect((await (await fetch(base + '/api/health')).json()).mode).toBe('social');
       expect(await (await fetch(base)).text()).toContain('БУНКЕР');
       const connect = async (header: string) => {
@@ -146,7 +177,7 @@ it.skipIf(process.platform === 'win32')(
       sockets.forEach((s) => s.disconnect());
       running.child.kill('SIGTERM');
       await exit(running.child);
-      await expect(readFile(confirmation.config)).rejects.toThrow();
+      if (confirmation.config) await expect(readFile(confirmation.config)).rejects.toThrow();
       const probe = createServer();
       await new Promise<void>((r, j) => {
         probe.once('error', j);
